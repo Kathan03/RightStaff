@@ -1,0 +1,1704 @@
+# 🚀 RightStaff Day 2 Implementation - Complete Resume Ingestion Pipeline
+
+## CONTEXT
+
+Day 1 was a SUCCESS! ✅ All health checks pass, webhook endpoint works, Redis queue operational, and background worker processes jobs.
+
+**Day 1 Achievements:**
+- ✅ Database connection with async pooling
+- ✅ Webhook endpoint accepting candidate updates
+- ✅ Redis queue for async job processing
+- ✅ Background worker polling Redis
+- ✅ MinIO integration for file storage
+- ✅ Basic ORM models and structured logging
+
+**Day 2 Goal:** Complete the resume ingestion pipeline by implementing:
+1. Real PDF/DOCX parsing (replace placeholder)
+2. Text chunking with semantic boundaries
+3. Embedding generation using sentence-transformers
+4. Qdrant vector storage with metadata
+5. Fix async/blocking issues in S3 client
+6. End-to-end pipeline integration
+
+**Why Day 2 Matters:** This completes the "Foundation" phase (Days 1-4) and enables all downstream features (ranking, chatbot, explanations).
+
+---
+
+## CRITICAL: Day 2 Implementation Principles
+
+1. **Zero Breaking Changes** - All Day 1 code must continue working
+2. **Production Patterns** - Use lazy loading, batching, proper error handling
+3. **Extensive Comments** - Explain WHY, not just WHAT
+4. **Type Safety** - Full type hints on all functions
+5. **Idempotent Operations** - Safe to run multiple times
+6. **Rich Logging** - Log progress at every pipeline stage
+7. **No Placeholders** - All TODOs for Day 2 must be completed
+
+---
+
+## DAY 2 TASK 1: Implement Real PDF/DOCX Parsing
+
+### Update `backend/app/services/parsers.py`
+
+Replace the placeholder `parse_resume()` function with real implementation using the Unstructured library:
+
+```python
+# backend/app/services/parsers.py
+"""
+Document parsing utilities for resumes and job descriptions.
+Supports PDF, DOCX, and plain text formats using Unstructured library.
+"""
+
+from typing import Optional, Dict, List
+import logging
+import io
+import tempfile
+from pathlib import Path
+
+# Document parsing libraries
+from unstructured.partition.auto import partition
+from unstructured.partition.pdf import partition_pdf
+from unstructured.partition.docx import partition_docx
+from unstructured.partition.text import partition_text
+
+logger = logging.getLogger(__name__)
+
+
+async def parse_resume(resume_bytes: bytes, filename: str) -> dict:
+    """
+    Parse resume from bytes (PDF/DOCX/TXT) and extract clean text.
+    
+    This is the entry point for resume parsing. It:
+    1. Detects file format from filename extension
+    2. Writes bytes to temporary file (Unstructured requires file path)
+    3. Uses appropriate Unstructured parser
+    4. Extracts and cleans text content
+    5. Returns structured result with text and metadata
+    
+    Args:
+        resume_bytes: File content as bytes
+        filename: Original filename (e.g., "s3://bucket/resume.pdf" or "resume.pdf")
+    
+    Returns:
+        {
+            "text": str,           # Extracted text content
+            "metadata": {
+                "filename": str,
+                "size_bytes": int,
+                "format": str,     # "pdf", "docx", "txt"
+                "page_count": int, # For PDFs
+                "char_count": int
+            }
+        }
+    
+    Raises:
+        ValueError: If file format is unsupported
+        Exception: If parsing fails
+    
+    Why temporary file?
+    - Unstructured library requires file paths, not bytes
+    - tempfile.NamedTemporaryFile handles cleanup automatically
+    - delete=False allows Unstructured to read after write
+    """
+    try:
+        # Extract file extension from filename (handle S3 URLs)
+        if filename.startswith("s3://"):
+            # Extract filename from S3 URL: s3://bucket/path/to/resume.pdf -> resume.pdf
+            filename = filename.split("/")[-1]
+        
+        file_ext = Path(filename).suffix.lower()
+        
+        logger.info(f"Parsing resume: {filename} (format: {file_ext}, size: {len(resume_bytes)} bytes)")
+        
+        # Write bytes to temporary file
+        # Why? Unstructured requires file paths, not in-memory bytes
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
+            tmp_file.write(resume_bytes)
+            tmp_path = tmp_file.name
+        
+        try:
+            # Parse based on file type
+            if file_ext == ".pdf":
+                elements = partition_pdf(
+                    filename=tmp_path,
+                    # Strategy options:
+                    # - "fast": OCR disabled, quick extraction
+                    # - "hi_res": OCR enabled, slower but better for scanned PDFs
+                    # - "auto": Chooses based on content
+                    strategy="fast",  # MVP: prioritize speed over OCR
+                    # Extract images? No, we only need text for embeddings
+                    extract_images_in_pdf=False,
+                    # Include page breaks in output?
+                    include_page_breaks=False
+                )
+                format_type = "pdf"
+                
+            elif file_ext in [".docx", ".doc"]:
+                elements = partition_docx(filename=tmp_path)
+                format_type = "docx"
+                
+            elif file_ext == ".txt":
+                elements = partition_text(filename=tmp_path)
+                format_type = "txt"
+                
+            else:
+                # Fallback: try auto-detection
+                logger.warning(f"Unknown file type {file_ext}, attempting auto-detection")
+                elements = partition(filename=tmp_path)
+                format_type = "unknown"
+            
+            # Extract text from elements
+            # Unstructured returns a list of elements (paragraphs, titles, etc.)
+            # We join them with double newlines to preserve structure
+            text_parts = [str(element) for element in elements]
+            text = "\n\n".join(text_parts).strip()
+            
+            # Clean up text (remove excessive whitespace)
+            # Why? Multi-page PDFs often have weird spacing
+            import re
+            text = re.sub(r'\n{3,}', '\n\n', text)  # Max 2 consecutive newlines
+            text = re.sub(r' {2,}', ' ', text)      # Max 1 space between words
+            
+            # Count pages (for PDFs)
+            page_count = len(set(el.metadata.page_number for el in elements 
+                               if hasattr(el, 'metadata') and hasattr(el.metadata, 'page_number')))
+            
+            logger.info(f"✅ Parsed {filename}: {len(text)} chars, {page_count or 'N/A'} pages")
+            
+            return {
+                "text": text,
+                "metadata": {
+                    "filename": filename,
+                    "size_bytes": len(resume_bytes),
+                    "format": format_type,
+                    "page_count": page_count if page_count > 0 else None,
+                    "char_count": len(text)
+                }
+            }
+        
+        finally:
+            # Clean up temporary file
+            Path(tmp_path).unlink(missing_ok=True)
+    
+    except Exception as e:
+        logger.error(f"❌ Error parsing {filename}: {e}")
+        raise ValueError(f"Failed to parse resume: {str(e)}") from e
+
+
+def chunk_text(
+    text: str,
+    chunk_size: int = 400,
+    chunk_overlap: int = 50
+) -> List[Dict[str, any]]:
+    """
+    Split text into overlapping chunks for embedding.
+    
+    This implements semantic-aware chunking:
+    1. Respects sentence boundaries (doesn't cut mid-sentence)
+    2. Maintains overlap for context continuity
+    3. Includes rich metadata for each chunk
+    
+    Why chunking?
+    - Embedding models have token limits (512 for all-MiniLM-L6-v2)
+    - Smaller chunks = more precise semantic search
+    - Overlap ensures no context is lost at boundaries
+    
+    Why 400 chars?
+    - ~100 tokens for typical English text
+    - Leaves room for special tokens in embedding model
+    - Fast to process, good granularity for search
+    
+    Args:
+        text: Input text to chunk
+        chunk_size: Target chunk size in characters (not strict, respects sentences)
+        chunk_overlap: Number of overlapping characters between chunks
+    
+    Returns:
+        List of chunk dictionaries:
+        [
+            {
+                "text": str,          # Chunk content
+                "start_char": int,    # Start position in original text
+                "end_char": int,      # End position in original text
+                "chunk_index": int,   # Sequential index (0, 1, 2, ...)
+                "char_count": int     # Length of chunk
+            },
+            ...
+        ]
+    
+    Example:
+        text = "This is sentence one. This is sentence two. This is sentence three."
+        chunks = chunk_text(text, chunk_size=30, chunk_overlap=10)
+        # Returns chunks respecting sentence boundaries with 10-char overlap
+    """
+    if not text or not text.strip():
+        logger.warning("Empty text provided for chunking")
+        return []
+    
+    chunks = []
+    start = 0
+    text_len = len(text)
+    
+    while start < text_len:
+        # Calculate end position
+        end = start + chunk_size
+        
+        # If this is not the last chunk, try to break at sentence boundary
+        if end < text_len:
+            # Look for sentence endings: period, question mark, exclamation, newline
+            # Search backwards from end position
+            chunk_text = text[start:end]
+            
+            # Find the last sentence boundary in the chunk
+            last_period = chunk_text.rfind(". ")
+            last_question = chunk_text.rfind("? ")
+            last_exclaim = chunk_text.rfind("! ")
+            last_newline = chunk_text.rfind("\n")
+            
+            # Get the furthest sentence boundary
+            break_point = max(last_period, last_question, last_exclaim, last_newline)
+            
+            # Only break at sentence if it's not too early in the chunk
+            # (we don't want chunks that are too small)
+            min_chunk_size = chunk_size // 2  # At least 50% of target size
+            if break_point > min_chunk_size:
+                # Move end to after the punctuation/newline
+                end = start + break_point + 1
+        
+        # Extract chunk text
+        chunk_text = text[start:end].strip()
+        
+        # Only add non-empty chunks
+        if chunk_text:
+            chunks.append({
+                "text": chunk_text,
+                "start_char": start,
+                "end_char": end,
+                "chunk_index": len(chunks),
+                "char_count": len(chunk_text)
+            })
+        
+        # Move start position for next chunk (with overlap)
+        # Why subtract overlap? So chunks share some context
+        start = end - chunk_overlap
+        
+        # Safety: prevent infinite loop if overlap >= chunk_size
+        if start <= chunks[-1]["start_char"] if chunks else False:
+            start = end
+    
+    logger.info(f"Split text into {len(chunks)} chunks (avg size: {sum(c['char_count'] for c in chunks) // len(chunks) if chunks else 0} chars)")
+    
+    return chunks
+
+
+def extract_metadata(text: str) -> Dict[str, any]:
+    """
+    Extract metadata from resume text (name, email, phone, etc.).
+    
+    TODO: Implement for Days 5-8 (when building ranking features)
+    - Use regex to extract email, phone
+    - Use spaCy NER to extract name, location
+    - Parse education section (degrees, universities)
+    - Parse work experience (companies, titles, dates)
+    - Calculate total years of experience
+    
+    For now, returns empty structure (not needed for Day 2 pipeline).
+    """
+    logger.debug("extract_metadata not yet implemented (scheduled for Days 5-8)")
+    return {
+        "name": None,
+        "email": None,
+        "phone": None,
+        "location": None,
+        "years_experience": None,
+        "education": [],
+        "work_history": []
+    }
+```
+
+---
+
+## DAY 2 TASK 2: Create Embeddings Service
+
+### Create NEW file `backend/app/services/embeddings.py`
+
+```python
+# backend/app/services/embeddings.py
+"""
+Embedding generation service using sentence-transformers.
+Converts text chunks into dense vectors for semantic search.
+
+Model: all-MiniLM-L6-v2
+- Dimensions: 384
+- Speed: ~3000 sentences/second on CPU
+- Quality: Good for MVP, will switch to OpenAI embeddings in production
+- Size: ~80MB (small enough for local deployment)
+"""
+
+from typing import List, Dict
+import logging
+import torch
+from sentence_transformers import SentenceTransformer
+from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+class EmbeddingService:
+    """
+    Singleton service for generating text embeddings.
+    
+    Uses lazy loading pattern:
+    - Model is NOT loaded on import (saves memory)
+    - Model loads on first .embed() call
+    - Model stays in memory for subsequent calls (avoids reload overhead)
+    
+    Why sentence-transformers?
+    - Free and open-source (no API costs)
+    - Runs locally (no network latency)
+    - Good quality for semantic search
+    - Same library provides cross-encoder for re-ranking (Day 9-10)
+    """
+    
+    def __init__(self):
+        """Initialize service (does NOT load model yet)."""
+        self._model = None
+        self._device = None
+        logger.info(f"EmbeddingService initialized (model will load on first use)")
+    
+    def _load_model(self):
+        """
+        Lazy load the embedding model.
+        
+        Why lazy loading?
+        - Faster startup time (don't load if not needed)
+        - Memory efficient (only load when actually embedding)
+        - Allows health checks to pass before heavy model loading
+        
+        Device selection logic:
+        - CUDA (NVIDIA GPU) if available -> fastest
+        - MPS (Apple Silicon) if available -> fast on M1/M2 Macs
+        - CPU as fallback -> slower but works everywhere
+        """
+        if self._model is not None:
+            return  # Already loaded
+        
+        logger.info(f"Loading embedding model: {settings.embedding_model}")
+        
+        # Detect best available device
+        if torch.cuda.is_available():
+            self._device = "cuda"
+            logger.info("✅ Using CUDA (GPU) for embeddings")
+        elif torch.backends.mps.is_available():
+            self._device = "mps"  # Apple Silicon
+            logger.info("✅ Using MPS (Apple Silicon GPU) for embeddings")
+        else:
+            self._device = "cpu"
+            logger.info("⚠️  Using CPU for embeddings (slower, consider GPU for production)")
+        
+        # Load model
+        # Why normalize_embeddings=True?
+        # - Required for cosine similarity in Qdrant
+        # - Ensures all vectors have length 1
+        # - Makes similarity scores interpretable (0 to 1)
+        self._model = SentenceTransformer(
+            settings.embedding_model,
+            device=self._device
+        )
+        
+        # Warmup: run one embedding to compile model
+        # Why? First embedding is always slower (JIT compilation, cache warmup)
+        logger.info("Warming up model with test embedding...")
+        _ = self._model.encode(["test"], convert_to_tensor=False, show_progress_bar=False)
+        
+        logger.info(f"✅ Model loaded successfully (dim={settings.embedding_dim})")
+    
+    async def embed_text(self, text: str) -> List[float]:
+        """
+        Generate embedding for a single text string.
+        
+        Args:
+            text: Input text to embed
+        
+        Returns:
+            List of floats (embedding vector) with length=384
+        
+        Example:
+            embedding = await embed_text("Software engineer with 5 years Python experience")
+            # Returns: [0.123, -0.456, 0.789, ..., 0.012] (384 dimensions)
+        """
+        self._load_model()  # Ensure model is loaded
+        
+        # encode() returns numpy array, convert to Python list
+        # Why convert_to_tensor=False?
+        # - We need plain Python lists for JSON serialization
+        # - Qdrant client accepts lists, not tensors
+        # Why show_progress_bar=False?
+        # - We're in async context, progress bars break logging
+        embedding = self._model.encode(
+            text,
+            convert_to_tensor=False,
+            show_progress_bar=False,
+            normalize_embeddings=True  # CRITICAL: required for cosine similarity
+        )
+        
+        return embedding.tolist()
+    
+    async def embed_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
+        """
+        Generate embeddings for multiple texts (more efficient than one-by-one).
+        
+        Why batching?
+        - GPU utilization: processes multiple texts in parallel
+        - ~3x faster than sequential embedding
+        - Amortizes model overhead across multiple texts
+        
+        Args:
+            texts: List of text strings to embed
+            batch_size: Number of texts to process at once
+                - 32 is good default for CPU (balances speed vs memory)
+                - Can increase to 128+ for GPU
+        
+        Returns:
+            List of embedding vectors, same order as input texts
+        
+        Example:
+            chunks = ["chunk 1 text", "chunk 2 text", "chunk 3 text"]
+            embeddings = await embed_batch(chunks)
+            # Returns: [[0.1, -0.2, ...], [0.3, 0.4, ...], [-0.1, 0.5, ...]]
+        """
+        if not texts:
+            logger.warning("Empty text list provided for embedding")
+            return []
+        
+        self._load_model()  # Ensure model is loaded
+        
+        logger.info(f"Generating embeddings for {len(texts)} texts (batch_size={batch_size})")
+        
+        # Batch encode: automatically splits into batches
+        # Why batch_size parameter?
+        # - Controls memory usage (larger batches = more memory)
+        # - GPU can handle larger batches than CPU
+        embeddings = self._model.encode(
+            texts,
+            batch_size=batch_size,
+            convert_to_tensor=False,
+            show_progress_bar=len(texts) > 10,  # Show progress for large batches
+            normalize_embeddings=True
+        )
+        
+        # Convert numpy array to list of lists
+        embeddings_list = embeddings.tolist()
+        
+        logger.info(f"✅ Generated {len(embeddings_list)} embeddings (dim={len(embeddings_list[0]) if embeddings_list else 0})")
+        
+        return embeddings_list
+    
+    def get_model_info(self) -> Dict[str, any]:
+        """
+        Get information about the loaded model.
+        
+        Returns:
+            Dictionary with model metadata
+        """
+        if self._model is None:
+            return {
+                "loaded": False,
+                "model_name": settings.embedding_model,
+                "device": None,
+                "embedding_dim": settings.embedding_dim
+            }
+        
+        return {
+            "loaded": True,
+            "model_name": settings.embedding_model,
+            "device": str(self._device),
+            "embedding_dim": settings.embedding_dim,
+            "max_seq_length": self._model.max_seq_length
+        }
+
+
+# Global singleton instance
+# Why singleton?
+# - Model is expensive to load (~80MB, ~2 seconds)
+# - Want to share one model across all requests
+# - Avoid loading multiple copies in memory
+embedding_service = EmbeddingService()
+```
+
+---
+
+## DAY 2 TASK 3: Complete Qdrant Vector Store Integration
+
+### Update `backend/app/services/vector_store.py`
+
+Replace the placeholder methods with full implementation:
+
+```python
+# backend/app/services/vector_store.py
+"""
+Qdrant vector database client for candidate embeddings.
+Handles vector storage, similarity search, and metadata filtering.
+"""
+
+from typing import List, Dict, Optional
+import logging
+import uuid
+from qdrant_client import QdrantClient
+from qdrant_client.models import (
+    Distance, 
+    VectorParams, 
+    PointStruct, 
+    Filter,
+    FieldCondition,
+    MatchValue
+)
+
+from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+class VectorStore:
+    """
+    Qdrant vector database client.
+    
+    Collection Schema:
+    - Vector size: 384 (all-MiniLM-L6-v2 embedding dimension)
+    - Distance: Cosine (normalized vectors, score 0-1)
+    - Payload schema:
+        {
+            "candidate_id": str (UUID),
+            "chunk_index": int,
+            "chunk_text": str,
+            "start_char": int,
+            "end_char": int,
+            "char_count": int,
+            "filename": str,
+            "created_at": str (ISO timestamp)
+        }
+    """
+
+    def __init__(self):
+        """Initialize Qdrant client."""
+        self.client = QdrantClient(
+            host=settings.qdrant_host,
+            port=settings.qdrant_port,
+            timeout=30
+        )
+        self.collection_name = settings.qdrant_collection
+        logger.info(f"Qdrant client initialized: {settings.qdrant_host}:{settings.qdrant_port}")
+
+    def create_collection(self, vector_size: int = 384):
+        """
+        Create Qdrant collection for candidate embeddings.
+        
+        This operation is idempotent:
+        - If collection exists, does nothing
+        - If collection doesn't exist, creates it
+        - Safe to call multiple times
+        
+        Why Cosine distance?
+        - Works with normalized vectors (all-MiniLM-L6-v2 normalizes)
+        - Scores are interpretable: 1.0 = identical, 0.0 = orthogonal
+        - Fast computation (single dot product after normalization)
+        
+        Args:
+            vector_size: Embedding dimension (384 for all-MiniLM-L6-v2)
+        
+        Raises:
+            Exception: If collection creation fails
+        """
+        try:
+            # Check if collection already exists
+            collections = self.client.get_collections().collections
+            collection_names = [c.name for c in collections]
+            
+            if self.collection_name in collection_names:
+                logger.info(f"✅ Collection '{self.collection_name}' already exists")
+                # Verify vector size matches
+                collection_info = self.client.get_collection(self.collection_name)
+                actual_size = collection_info.config.params.vectors.size
+                if actual_size != vector_size:
+                    logger.warning(
+                        f"⚠️  Collection vector size mismatch: expected {vector_size}, got {actual_size}"
+                    )
+                return
+            
+            # Create new collection
+            logger.info(f"Creating collection '{self.collection_name}' with vector_size={vector_size}")
+            
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(
+                    size=vector_size,
+                    distance=Distance.COSINE
+                )
+            )
+            
+            logger.info(f"✅ Created collection: {self.collection_name}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating collection: {e}")
+            raise
+
+    def upsert_vectors(
+        self,
+        vectors: List[List[float]],
+        payloads: List[Dict],
+        ids: Optional[List[str]] = None
+    ) -> bool:
+        """
+        Insert or update vectors in collection.
+        
+        This is the main method for storing resume chunk embeddings.
+        
+        Why "upsert" instead of "insert"?
+        - If vector with same ID exists, it updates (no duplicate error)
+        - If vector doesn't exist, it inserts
+        - Idempotent: safe to run multiple times for same candidate
+        
+        How IDs work:
+        - Format: "{candidate_id}_chunk_{chunk_index}"
+        - Example: "a1b2c3d4-...-uuid_chunk_0"
+        - Allows querying by candidate (filter by prefix)
+        - Allows deletion by candidate (delete all chunks)
+        
+        Args:
+            vectors: List of embedding vectors [[0.1, 0.2, ...], ...]
+            payloads: List of metadata dicts (must match vectors length)
+            ids: Optional list of IDs (auto-generated if None)
+        
+        Returns:
+            True if successful
+        
+        Raises:
+            ValueError: If vectors/payloads length mismatch
+            Exception: If upsert operation fails
+        
+        Example:
+            vectors = [[0.1, 0.2, ...], [0.3, 0.4, ...]]
+            payloads = [
+                {"candidate_id": "uuid1", "chunk_index": 0, "chunk_text": "..."},
+                {"candidate_id": "uuid1", "chunk_index": 1, "chunk_text": "..."}
+            ]
+            success = upsert_vectors(vectors, payloads)
+        """
+        if len(vectors) != len(payloads):
+            raise ValueError(
+                f"Vectors and payloads length mismatch: {len(vectors)} != {len(payloads)}"
+            )
+        
+        if not vectors:
+            logger.warning("Empty vectors list provided for upsert")
+            return False
+        
+        # Generate IDs if not provided
+        if ids is None:
+            ids = []
+            for payload in payloads:
+                candidate_id = payload.get("candidate_id", str(uuid.uuid4()))
+                chunk_index = payload.get("chunk_index", 0)
+                # ID format: "{candidate_id}_chunk_{index}"
+                point_id = f"{candidate_id}_chunk_{chunk_index}"
+                ids.append(point_id)
+        
+        logger.info(f"Upserting {len(vectors)} vectors to collection '{self.collection_name}'")
+        
+        try:
+            # Create PointStruct objects
+            # Why PointStruct?
+            # - Qdrant's native format for vector points
+            # - Combines ID, vector, and metadata (payload)
+            points = [
+                PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload=payload
+                )
+                for point_id, vector, payload in zip(ids, vectors, payloads)
+            ]
+            
+            # Upsert to Qdrant
+            # Why upsert instead of insert?
+            # - Handles re-indexing gracefully (no "already exists" errors)
+            # - Idempotent operation
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=points,
+                wait=True  # Wait for operation to complete (ensures consistency)
+            )
+            
+            logger.info(f"✅ Successfully upserted {len(vectors)} vectors")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error upserting vectors: {e}")
+            raise
+
+    def delete_by_candidate_id(self, candidate_id: str) -> bool:
+        """
+        Delete all vectors for a candidate (all resume chunks).
+        
+        Why delete?
+        - Re-indexing: when candidate uploads new resume
+        - Compliance: when candidate requests data deletion
+        - Cleanup: when candidate is removed from system
+        
+        How deletion works:
+        - Uses metadata filter on candidate_id field
+        - Deletes all vectors matching the filter
+        - Idempotent: no error if candidate has no vectors
+        
+        Args:
+            candidate_id: Candidate UUID (string)
+        
+        Returns:
+            True if successful (even if no vectors found)
+        
+        Example:
+            delete_by_candidate_id("a1b2c3d4-1234-5678-90ab-cdef12345678")
+            # Deletes all chunk vectors for this candidate
+        """
+        logger.info(f"Deleting all vectors for candidate: {candidate_id}")
+        
+        try:
+            # Delete using filter
+            # Why filter instead of ID list?
+            # - Don't need to query first to get all IDs
+            # - More efficient (single operation)
+            # - Works even if we don't know chunk count
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="candidate_id",
+                            match=MatchValue(value=candidate_id)
+                        )
+                    ]
+                ),
+                wait=True  # Wait for deletion to complete
+            )
+            
+            logger.info(f"✅ Deleted vectors for candidate: {candidate_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error deleting vectors for candidate {candidate_id}: {e}")
+            # Don't raise - deletion failure shouldn't break the pipeline
+            # Candidate data in PostgreSQL is still authoritative
+            return False
+
+    def search(
+        self,
+        query_vector: List[float],
+        top_k: int = 10,
+        score_threshold: Optional[float] = None,
+        filter_dict: Optional[Dict] = None
+    ) -> List[Dict]:
+        """
+        Search for similar vectors (semantic search).
+        
+        TODO: Implement for Days 5-8 (ranking feature)
+        
+        This will be used for:
+        - Finding candidates similar to job description
+        - Answering chatbot questions (Days 11-12)
+        
+        Not needed for Day 2 ingestion pipeline.
+        """
+        logger.warning("search not yet implemented - returning empty list (scheduled for Days 5-8)")
+        return []
+
+    def get_collection_info(self) -> Dict:
+        """
+        Get collection statistics (vector count, config, etc.).
+        
+        Useful for:
+        - Health checks
+        - Monitoring
+        - Debugging
+        
+        Returns:
+            {
+                "vectors_count": int,
+                "points_count": int,
+                "status": str,
+                "vector_size": int
+            }
+        """
+        try:
+            info = self.client.get_collection(self.collection_name)
+            return {
+                "vectors_count": info.vectors_count or 0,
+                "points_count": info.points_count or 0,
+                "status": info.status,
+                "vector_size": info.config.params.vectors.size
+            }
+        except Exception as e:
+            logger.error(f"Error getting collection info: {e}")
+            return {
+                "vectors_count": 0,
+                "points_count": 0,
+                "status": "error",
+                "error": str(e)
+            }
+
+    def health_check(self) -> bool:
+        """
+        Check if Qdrant is responsive.
+        
+        Returns:
+            True if healthy, False otherwise
+        """
+        try:
+            self.client.get_collections()
+            return True
+        except Exception as e:
+            logger.error(f"Qdrant health check failed: {e}")
+            return False
+
+
+# Global vector store instance
+vector_store = VectorStore()
+```
+
+---
+
+## DAY 2 TASK 4: Fix Async/Blocking in S3 Client
+
+### Update `backend/app/services/s3_client.py`
+
+The current implementation marks methods as `async` but uses synchronous MinIO client, which blocks the event loop. Fix this:
+
+```python
+# backend/app/services/s3_client.py
+"""
+S3-compatible client for MinIO (MVP) / AWS S3 (production).
+Handles resume file uploads and downloads with proper async support.
+"""
+from minio import Minio
+from minio.error import S3Error
+from app.config import settings
+from app.utils.logging import logger
+import io
+import asyncio
+
+class S3Client:
+    """MinIO/S3 client for resume file storage."""
+    
+    def __init__(self):
+        self.client = Minio(
+            settings.minio_endpoint,
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            secure=settings.minio_use_ssl
+        )
+        self.bucket_name = settings.minio_bucket
+        self._ensure_bucket()
+    
+    def _ensure_bucket(self):
+        """Create bucket if it doesn't exist (idempotent)."""
+        try:
+            if not self.client.bucket_exists(self.bucket_name):
+                self.client.make_bucket(self.bucket_name)
+                logger.info(f"Created MinIO bucket: {self.bucket_name}")
+            else:
+                logger.info(f"MinIO bucket exists: {self.bucket_name}")
+        except S3Error as e:
+            logger.error(f"Error ensuring bucket: {e}")
+            raise
+    
+    async def download_file(self, s3_url: str) -> bytes:
+        """
+        Download a file from MinIO/S3 (properly async).
+        
+        IMPORTANT FIX: Previous version was marked async but used blocking MinIO calls.
+        This version uses asyncio.to_thread() to run blocking I/O in thread pool.
+        
+        Why asyncio.to_thread()?
+        - MinIO client is synchronous (blocks on network I/O)
+        - Running in thread prevents blocking FastAPI event loop
+        - Other requests can process while this downloads
+        
+        Args:
+            s3_url: Format s3://bucket-name/path/to/file.pdf
+        
+        Returns:
+            File content as bytes
+        
+        Raises:
+            ValueError: If S3 URL format is invalid
+            S3Error: If download fails
+        """
+        try:
+            # Parse S3 URL: s3://bucket/key/path
+            if not s3_url.startswith("s3://"):
+                raise ValueError(f"Invalid S3 URL format: {s3_url}")
+            
+            parts = s3_url.replace("s3://", "").split("/", 1)
+            bucket = parts[0]
+            key = parts[1] if len(parts) > 1 else ""
+            
+            logger.info(f"Downloading from bucket={bucket}, key={key}")
+            
+            # Run blocking I/O in thread pool
+            # Why to_thread?
+            # - self.client.get_object() is blocking (network I/O)
+            # - to_thread() runs it in separate thread
+            # - Event loop stays responsive for other requests
+            response = await asyncio.to_thread(
+                self.client.get_object,
+                bucket,
+                key
+            )
+            
+            # Read data (also blocking, so run in thread)
+            data = await asyncio.to_thread(response.read)
+            
+            # Cleanup (run in thread for consistency)
+            await asyncio.to_thread(response.close)
+            await asyncio.to_thread(response.release_conn)
+            
+            logger.info(f"✅ Downloaded {len(data)} bytes from {s3_url}")
+            return data
+        
+        except S3Error as e:
+            logger.error(f"❌ Error downloading {s3_url}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Unexpected error downloading {s3_url}: {e}")
+            raise
+    
+    async def upload_file(
+        self, 
+        file_data: bytes, 
+        object_name: str, 
+        content_type: str = "application/pdf"
+    ) -> str:
+        """
+        Upload a file to MinIO/S3 (properly async).
+        
+        Args:
+            file_data: File content as bytes
+            object_name: Path/filename in bucket (e.g., "resumes/candidate_123.pdf")
+            content_type: MIME type
+        
+        Returns:
+            S3 URL of uploaded file
+        """
+        try:
+            # Run blocking upload in thread pool
+            await asyncio.to_thread(
+                self.client.put_object,
+                self.bucket_name,
+                object_name,
+                io.BytesIO(file_data),
+                len(file_data),
+                content_type
+            )
+            
+            s3_url = f"s3://{self.bucket_name}/{object_name}"
+            logger.info(f"✅ Uploaded {object_name} to MinIO ({len(file_data)} bytes)")
+            return s3_url
+            
+        except S3Error as e:
+            logger.error(f"❌ Error uploading {object_name}: {e}")
+            raise
+
+# Singleton instance
+s3_client = S3Client()
+```
+
+---
+
+## DAY 2 TASK 5: Complete Ingestion Pipeline
+
+### Update `backend/app/services/ingestion.py`
+
+Connect all the pieces: Parse → Chunk → Embed → Store
+
+```python
+# backend/app/services/ingestion.py
+"""
+Background worker that processes ingestion jobs from Redis queue.
+Flow: Poll Redis → Fetch candidate → Download resume → Parse → Chunk → Embed → Store in Qdrant
+"""
+import asyncio
+import json
+from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
+from app.database import AsyncSessionLocal
+from app.models.candidate import Candidate, CandidateContact, CandidateResume
+from app.services.redis_client import redis_client
+from app.services.s3_client import s3_client
+from app.services.parsers import parse_resume, chunk_text
+from app.services.embeddings import embedding_service
+from app.services.vector_store import vector_store
+from app.utils.logging import logger
+
+class IngestionWorker:
+    """Background worker for processing resume ingestion jobs."""
+    
+    def __init__(self):
+        self.running = False
+    
+    async def start(self):
+        """Start the background worker loop."""
+        self.running = True
+        logger.info("🚀 Ingestion worker started - polling Redis queue")
+        
+        # Initialize Qdrant collection on startup
+        # Why here? Ensures collection exists before any ingestion
+        try:
+            vector_store.create_collection(vector_size=384)
+        except Exception as e:
+            logger.error(f"Failed to initialize Qdrant collection: {e}")
+            # Continue anyway - will retry on first ingestion job
+        
+        while self.running:
+            try:
+                # Step 1: Pop job from Redis queue (blocking pop, 5s timeout)
+                result = await redis_client.brpop("ingestion_queue", timeout=5)
+                
+                if result is None:
+                    # No jobs in queue, loop again
+                    continue
+                
+                # Step 2: Parse job data
+                _, job_data_str = result  # result is (queue_name, data)
+                job_data = json.loads(job_data_str)
+                
+                logger.info(f"📦 Processing job {job_data['job_id']}")
+                
+                # Step 3: Process the job
+                await self.process_job(job_data)
+                
+            except Exception as e:
+                logger.error(f"❌ Worker error: {e}")
+                await asyncio.sleep(1)  # Backoff on error
+    
+    def stop(self):
+        """Stop the worker gracefully."""
+        self.running = False
+        logger.info("🛑 Ingestion worker stopped")
+    
+    async def process_job(self, job_data: dict):
+        """
+        Process a single ingestion job - THE COMPLETE PIPELINE.
+        
+        Pipeline stages:
+        1. Fetch candidate details from PostgreSQL
+        2. Download resume from MinIO
+        3. Parse resume (extract text)
+        4. Chunk text (split into semantic units)
+        5. Generate embeddings (convert to vectors)
+        6. Store in Qdrant (save vectors + metadata)
+        
+        Why this order?
+        - Each stage depends on previous stage's output
+        - Early stages are fast (fetch, download)
+        - Late stages are expensive (embedding, storage)
+        - If early stage fails, we don't waste compute on late stages
+        
+        Error handling:
+        - Logs errors at each stage
+        - Raises exception to indicate failure
+        - TODO (Day 3): Add retry logic with exponential backoff
+        
+        Args:
+            job_data: Job metadata from Redis queue
+                {
+                    "job_id": str,
+                    "candidate_id": str (UUID),
+                    "s3_resume_url": str,
+                    "event_type": str,
+                    "timestamp": str (ISO format)
+                }
+        """
+        async with AsyncSessionLocal() as db:
+            try:
+                candidate_id = job_data["candidate_id"]
+                s3_url = job_data["s3_resume_url"]
+                
+                # ========================================
+                # STAGE 1: Fetch candidate details
+                # ========================================
+                logger.info(f"[1/6] Fetching candidate details: {candidate_id}")
+                
+                result = await db.execute(
+                    select(Candidate)
+                    .options(selectinload(Candidate.contact))
+                    .where(Candidate.id == candidate_id)
+                )
+                candidate = result.scalar_one_or_none()
+                
+                if not candidate:
+                    logger.error(f"❌ Candidate {candidate_id} not found in database")
+                    return
+                
+                logger.info(f"✅ Found candidate: {candidate.full_name}")
+                
+                # ========================================
+                # STAGE 2: Download resume from MinIO
+                # ========================================
+                logger.info(f"[2/6] Downloading resume from {s3_url}")
+                
+                resume_bytes = await s3_client.download_file(s3_url)
+                
+                logger.info(f"✅ Downloaded {len(resume_bytes)} bytes")
+                
+                # ========================================
+                # STAGE 3: Parse resume (extract text)
+                # ========================================
+                logger.info(f"[3/6] Parsing resume (extracting text)")
+                
+                parsed_data = await parse_resume(resume_bytes, s3_url)
+                text = parsed_data["text"]
+                metadata = parsed_data["metadata"]
+                
+                logger.info(
+                    f"✅ Extracted {metadata['char_count']} chars "
+                    f"(format: {metadata['format']}, pages: {metadata.get('page_count', 'N/A')})"
+                )
+                
+                # ========================================
+                # STAGE 4: Chunk text
+                # ========================================
+                logger.info(f"[4/6] Chunking text (size=400, overlap=50)")
+                
+                chunks = chunk_text(
+                    text,
+                    chunk_size=400,
+                    chunk_overlap=50
+                )
+                
+                if not chunks:
+                    logger.warning(f"⚠️  No chunks generated (text too short?). Skipping embedding.")
+                    return
+                
+                logger.info(f"✅ Created {len(chunks)} chunks")
+                
+                # ========================================
+                # STAGE 5: Generate embeddings
+                # ========================================
+                logger.info(f"[5/6] Generating embeddings for {len(chunks)} chunks")
+                
+                # Extract text from chunks for embedding
+                chunk_texts = [chunk["text"] for chunk in chunks]
+                
+                # Batch embed (more efficient than one-by-one)
+                embeddings = await embedding_service.embed_batch(
+                    chunk_texts,
+                    batch_size=32  # Good default for CPU
+                )
+                
+                logger.info(f"✅ Generated {len(embeddings)} embeddings (dim={len(embeddings[0])})")
+                
+                # ========================================
+                # STAGE 6: Store in Qdrant
+                # ========================================
+                logger.info(f"[6/6] Storing vectors in Qdrant")
+                
+                # Build payloads (metadata for each vector)
+                payloads = []
+                for chunk, embedding in zip(chunks, embeddings):
+                    payload = {
+                        "candidate_id": str(candidate_id),
+                        "chunk_index": chunk["chunk_index"],
+                        "chunk_text": chunk["text"],
+                        "start_char": chunk["start_char"],
+                        "end_char": chunk["end_char"],
+                        "char_count": chunk["char_count"],
+                        "filename": metadata["filename"],
+                        "created_at": datetime.utcnow().isoformat()
+                    }
+                    payloads.append(payload)
+                
+                # Delete old vectors for this candidate (if re-indexing)
+                # Why delete first?
+                # - Prevents duplicate vectors if resume was updated
+                # - Ensures we don't have stale data from old resume
+                logger.info(f"Deleting old vectors for candidate {candidate_id} (if any)")
+                vector_store.delete_by_candidate_id(str(candidate_id))
+                
+                # Upsert new vectors
+                success = vector_store.upsert_vectors(
+                    vectors=embeddings,
+                    payloads=payloads
+                )
+                
+                if not success:
+                    raise Exception("Vector upsert failed")
+                
+                logger.info(f"✅ Stored {len(embeddings)} vectors in Qdrant")
+                
+                # ========================================
+                # SUCCESS SUMMARY
+                # ========================================
+                logger.info(
+                    f"✅✅✅ Successfully processed job {job_data['job_id']}\n"
+                    f"   Candidate: {candidate.full_name}\n"
+                    f"   Location: {candidate.contact.city if candidate.contact else 'N/A'}\n"
+                    f"   Text: {metadata['char_count']} chars\n"
+                    f"   Chunks: {len(chunks)}\n"
+                    f"   Vectors: {len(embeddings)} (dim={len(embeddings[0])})"
+                )
+                
+            except Exception as e:
+                logger.error(f"❌ Job processing failed: {e}")
+                # TODO (Day 3): Implement retry logic with exponential backoff
+                # TODO (Day 3): Move to dead letter queue after max retries
+                raise
+
+# Global worker instance
+ingestion_worker = IngestionWorker()
+```
+
+---
+
+## DAY 2 TASK 6: Update Configuration
+
+### Update `backend/app/config.py`
+
+Add validation for embedding settings:
+
+```python
+# backend/app/config.py
+"""
+Configuration management for RightStaff AI Backend.
+Loads settings from environment variables with validation.
+"""
+
+from pydantic_settings import BaseSettings
+from pydantic import Field, field_validator
+from typing import Optional
+from urllib.parse import quote_plus
+
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
+    # Environment
+    debug: bool = Field(default=False, env="DEBUG")
+    env: str = Field(default="development", env="ENV")
+
+    # PostgreSQL
+    postgres_host: str = Field(default="localhost", env="POSTGRES_HOST")
+    postgres_port: int = Field(default=5432, env="POSTGRES_PORT")
+    postgres_db: str = Field(default="rightstaff", env="POSTGRES_DB")
+    postgres_user: str = Field(default="right_staff", env="POSTGRES_USER")
+    postgres_password: str = Field(default="dev_password_123", env="POSTGRES_PASSWORD")
+
+    # Qdrant
+    qdrant_host: str = Field(default="localhost", env="QDRANT_HOST")
+    qdrant_port: int = Field(default=6333, env="QDRANT_PORT")
+    qdrant_collection: str = Field(default="candidates_v1", env="QDRANT_COLLECTION")
+
+    # Redis
+    redis_host: str = Field(default="localhost", env="REDIS_HOST")
+    redis_port: int = Field(default=6379, env="REDIS_PORT")
+    redis_password: str = Field(default="dev_redis_123", env="REDIS_PASSWORD")
+    redis_db: int = Field(default=0, env="REDIS_DB")
+
+    # MinIO
+    minio_endpoint: str = Field(default="localhost:9000", env="MINIO_ENDPOINT")
+    minio_access_key: str = Field(default="minioadmin", env="MINIO_ACCESS_KEY")
+    minio_secret_key: str = Field(default="minioadmin123", env="MINIO_SECRET_KEY")
+    minio_bucket: str = Field(default="rightstaff-resumes", env="MINIO_BUCKET")
+    minio_use_ssl: bool = Field(default=False, env="MINIO_USE_SSL")
+
+    # AI Models
+    embedding_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        env="EMBEDDING_MODEL"
+    )
+    embedding_dim: int = Field(default=384, env="EMBEDDING_DIM")
+    
+    # Text Processing
+    chunk_size: int = Field(default=400, env="CHUNK_SIZE", ge=50, le=2000)
+    chunk_overlap: int = Field(default=50, env="CHUNK_OVERLAP", ge=0, le=500)
+
+    # Cross-Encoder for Re-ranking (MVP - Days 9-10)
+    reranker_model: str = Field(
+        default="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        env="RERANKER_MODEL"
+    )
+
+    # OpenAI (optional, for production)
+    openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
+
+    # API Settings
+    api_rate_limit: int = Field(default=100, env="API_RATE_LIMIT")
+    max_file_size_mb: int = Field(default=5, env="MAX_FILE_SIZE_MB")
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        case_sensitive = False
+
+    @field_validator("chunk_overlap")
+    @classmethod
+    def validate_chunk_overlap(cls, v, info):
+        """Ensure chunk_overlap is less than chunk_size."""
+        chunk_size = info.data.get("chunk_size", 400)
+        if v >= chunk_size:
+            raise ValueError(f"chunk_overlap ({v}) must be less than chunk_size ({chunk_size})")
+        return v
+
+    @property
+    def database_url(self) -> str:
+        """Get PostgreSQL connection URL (synchronous)."""
+        encoded_user = quote_plus(self.postgres_user)
+        encoded_password = quote_plus(self.postgres_password)
+        return (
+            f"postgresql://{encoded_user}:{encoded_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @property
+    def async_database_url(self) -> str:
+        """Get async PostgreSQL connection URL (for asyncpg)."""
+        encoded_user = quote_plus(self.postgres_user)
+        encoded_password = quote_plus(self.postgres_password)
+        return (
+            f"postgresql+asyncpg://{encoded_user}:{encoded_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @property
+    def redis_url(self) -> str:
+        """Get Redis connection URL."""
+        encoded_password = quote_plus(self.redis_password)
+        return f"redis://:{encoded_password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
+
+
+# Global settings instance
+settings = Settings()
+```
+
+---
+
+## TESTING INSTRUCTIONS
+
+### Step 1: Verify Services Are Running
+
+```bash
+# Check Docker containers
+docker ps
+
+# Should see: rightstaff-postgres, rightstaff-redis, rightstaff-qdrant, rightstaff-minio
+
+# Check health endpoint
+curl http://localhost:8000/health
+
+# Should return all "ok"
+```
+
+### Step 2: Check Qdrant Collection
+
+```bash
+# Open Qdrant dashboard
+# Windows: start http://localhost:6333/dashboard
+# Mac/Linux: open http://localhost:6333/dashboard
+
+# Or check via API
+curl http://localhost:6333/collections/candidates_v1
+```
+
+### Step 3: Prepare Test Resume
+
+```bash
+# Upload a test PDF to MinIO (if not already there)
+# The seed data should have created: s3://rightstaff-resumes/resumes/pratz_v2.pdf
+
+# Verify it exists in MinIO console
+# Windows: start http://localhost:9001
+# Login: minioadmin / minioadmin123
+```
+
+### Step 4: Get Test Candidate ID
+
+```bash
+# Query database for a candidate ID
+docker exec -it rightstaff-postgres psql -U right_staff -d rightstaff -c "SELECT id, full_name FROM rightstaff.candidate LIMIT 1;"
+
+# Copy the UUID (example: 'a1b2c3d4-1234-5678-90ab-cdef12345678')
+```
+
+### Step 5: Trigger Ingestion via Webhook
+
+```bash
+# Replace CANDIDATE_ID_HERE with actual UUID from Step 4
+
+curl -X POST http://localhost:8000/api/v1/webhooks/candidate-updated \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_type": "profile_created",
+    "candidate_id": "CANDIDATE_ID_HERE",
+    "timestamp": "2025-11-06T10:00:00Z",
+    "s3_resume_url": "s3://rightstaff-resumes/resumes/pratz_v2.pdf",
+    "profile_snapshot": {}
+  }'
+
+# Should return:
+# {
+#   "status": "accepted",
+#   "candidate_id": "...",
+#   "processing_job_id": "ingest_...",
+#   "estimated_completion_seconds": 30
+# }
+```
+
+### Step 6: Monitor Logs
+
+Watch the terminal running `uvicorn app.main:app --reload`. You should see:
+
+```
+📬 Received webhook: profile_created for candidate ...
+✅ Queued job ingest_...
+📦 Processing job ingest_...
+[1/6] Fetching candidate details: ...
+✅ Found candidate: Prathyusha Elipay
+[2/6] Downloading resume from s3://...
+✅ Downloaded 245123 bytes
+[3/6] Parsing resume (extracting text)
+✅ Extracted 3542 chars (format: pdf, pages: 2)
+[4/6] Chunking text (size=400, overlap=50)
+✅ Created 12 chunks
+[5/6] Generating embeddings for 12 chunks
+Loading embedding model: sentence-transformers/all-MiniLM-L6-v2
+Using CPU for embeddings
+Warming up model with test embedding...
+✅ Model loaded successfully (dim=384)
+✅ Generated 12 embeddings (dim=384)
+[6/6] Storing vectors in Qdrant
+Deleting old vectors for candidate ... (if any)
+Upserting 12 vectors to collection 'candidates_v1'
+✅ Successfully upserted 12 vectors
+✅✅✅ Successfully processed job ingest_...
+   Candidate: Prathyusha Elipay
+   Location: State College
+   Text: 3542 chars
+   Chunks: 12
+   Vectors: 12 (dim=384)
+```
+
+### Step 7: Verify Vectors in Qdrant
+
+```bash
+# Check collection has vectors
+curl http://localhost:6333/collections/candidates_v1
+
+# Should show points_count > 0
+
+# Query for specific candidate's vectors (replace CANDIDATE_ID)
+curl -X POST http://localhost:6333/collections/candidates_v1/points/scroll \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filter": {
+      "must": [
+        {
+          "key": "candidate_id",
+          "match": {"value": "CANDIDATE_ID_HERE"}
+        }
+      ]
+    },
+    "limit": 5,
+    "with_payload": true,
+    "with_vector": false
+  }'
+
+# Should return chunks with metadata
+```
+
+### Step 8: Test Re-Indexing (Idempotency)
+
+```bash
+# Send the same webhook again (should replace old vectors)
+curl -X POST http://localhost:8000/api/v1/webhooks/candidate-updated \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_type": "resume_uploaded",
+    "candidate_id": "SAME_CANDIDATE_ID_AS_BEFORE",
+    "timestamp": "2025-11-06T11:00:00Z",
+    "s3_resume_url": "s3://rightstaff-resumes/resumes/pratz_v2.pdf",
+    "profile_snapshot": {}
+  }'
+
+# Check logs - should see "Deleting old vectors" message
+# Verify Qdrant still has same number of vectors (not doubled)
+```
+
+---
+
+## SUCCESS CRITERIA
+
+After completing Day 2, verify ALL of these:
+
+### Health & Infrastructure
+- [ ] All services return "ok" in `/health` endpoint
+- [ ] No errors in Docker container logs
+- [ ] FastAPI starts without errors
+
+### PDF Parsing
+- [ ] Real PDF parsing extracts readable text (not placeholder)
+- [ ] Text length matches file content (not just "Placeholder text...")
+- [ ] Multi-page PDFs are fully extracted
+- [ ] Logs show format detection (pdf/docx/txt)
+
+### Text Chunking
+- [ ] Text is split into multiple chunks
+- [ ] Chunks have proper metadata (chunk_index, start_char, end_char)
+- [ ] Chunks respect sentence boundaries (no mid-sentence cuts)
+- [ ] Chunk count is reasonable (~10-20 for typical resume)
+
+### Embeddings
+- [ ] sentence-transformers model loads successfully
+- [ ] Model info logs show device (CPU/GPU)
+- [ ] Embeddings have correct dimensions (384)
+- [ ] Embedding generation completes without errors
+
+### Qdrant Storage
+- [ ] Collection `candidates_v1` is created
+- [ ] Vectors are stored with correct dimensions (384)
+- [ ] Payloads contain all required metadata fields
+- [ ] Points count matches chunk count
+- [ ] Re-indexing replaces old vectors (no duplicates)
+
+### Pipeline Integration
+- [ ] Complete pipeline runs end-to-end (6 stages)
+- [ ] Each stage logs success message
+- [ ] Final summary shows correct stats
+- [ ] No placeholder code remains in pipeline
+
+### Code Quality
+- [ ] No `TODO (Day 2)` comments remain
+- [ ] All functions have docstrings
+- [ ] Type hints on all function signatures
+- [ ] No blocking operations in async functions
+- [ ] Error messages are descriptive
+
+### Verification Commands
+```bash
+# 1. Health check - all ok
+curl http://localhost:8000/health | jq
+
+# 2. Qdrant has collection
+curl http://localhost:6333/collections/candidates_v1 | jq '.result.points_count'
+# Should be > 0
+
+# 3. Check embedding service info (add this endpoint if helpful)
+# curl http://localhost:8000/api/v1/debug/embedding-info
+
+# 4. Trigger webhook and verify logs show all 6 stages
+
+# 5. Query Qdrant for vectors
+curl -X POST http://localhost:6333/collections/candidates_v1/points/scroll \
+  -H "Content-Type: application/json" \
+  -d '{"limit": 1, "with_payload": true}' | jq '.result.points[0].payload'
+# Should show candidate_id, chunk_text, chunk_index, etc.
+```
+
+---
+
+## COMMON ISSUES & SOLUTIONS
+
+### Issue: Model Download Fails
+
+**Symptom:** `ConnectionError: Can't reach Hugging Face`
+
+**Solution:**
+```bash
+# Pre-download model
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+```
+
+### Issue: PDF Parsing Returns Empty Text
+
+**Symptom:** `char_count: 0` in logs
+
+**Solution:**
+- Check PDF is not encrypted
+- Try with `strategy="hi_res"` for scanned PDFs
+- Verify PDF file is not corrupted
+
+### Issue: Qdrant Collection Already Exists with Different Vector Size
+
+**Symptom:** `Vector size mismatch: expected 384, got 512`
+
+**Solution:**
+```bash
+# Delete and recreate collection
+curl -X DELETE http://localhost:6333/collections/candidates_v1
+
+# Restart FastAPI (will recreate collection)
+```
+
+### Issue: Worker Crashes with "Event loop closed"
+
+**Symptom:** `RuntimeError: Event loop is closed`
+
+**Solution:**
+- Ensure all async operations use `await`
+- Check no blocking calls in async functions
+- Verify asyncio.to_thread() is used for MinIO
+
+### Issue: Embeddings Take Too Long
+
+**Symptom:** Stage 5 takes >30 seconds
+
+**Solution:**
+- Reduce batch_size (32 -> 16 for CPU)
+- Check CPU usage (model should use ~100% of one core)
+- Consider GPU if available
+
+---
+
+## WHAT'S NEXT? (Day 3 Preview)
+
+Day 3 will add robustness to the pipeline:
+
+1. **Retry Logic** - Exponential backoff with `tenacity` library
+2. **Dead Letter Queue** - Failed jobs after max retries
+3. **Rate Limiting** - Webhook endpoint protection
+4. **Input Validation** - File size limits, format checks
+5. **Monitoring** - Metrics for each pipeline stage
+6. **Unit Tests** - Test suite for all components
+
+But for now, celebrate Day 2 completion! 🎉
+
+You now have a complete, working resume ingestion pipeline that:
+- ✅ Parses real PDFs
+- ✅ Chunks text semantically
+- ✅ Generates embeddings
+- ✅ Stores vectors in Qdrant
+- ✅ Runs end-to-end automatically
+
+This is the foundation for ALL ranking, search, and chatbot features!
+
+---
+
+## FINAL CHECKLIST
+
+Before moving to Day 3, ensure:
+
+- [ ] All health checks pass
+- [ ] Real PDF parsing works (not placeholder)
+- [ ] Embeddings are generated (384-dimensional)
+- [ ] Vectors are stored in Qdrant
+- [ ] Pipeline runs end-to-end without errors
+- [ ] Logs show all 6 stages successfully
+- [ ] Re-indexing works (no duplicate vectors)
+- [ ] No blocking operations in async code
+- [ ] Code is well-commented and type-hinted
+- [ ] No `TODO (Day 2)` comments remain
+
+**If all checked: Day 2 COMPLETE! 🎉**
+
+**If any fails: Debug using logs and verification commands above**
+
