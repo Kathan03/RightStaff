@@ -28,7 +28,7 @@ Portal Team → Webhook → AI Team (This Repo)
 ## 🛠️ Tech Stack
 
 **MVP (Complete in 14 Days):**
-- FastAPI, PostgreSQL 15, Qdrant v1.7.0, Redis 7.2, MinIO
+- FastAPI, PostgreSQL 18, Qdrant v1.7.0, Redis 7.2, MinIO
 - sentence-transformers (embeddings + CrossEncoder re-ranking), spaCy, Unstructured (parsing)
 - WebSocket support for real-time chatbot
 - Docker Compose
