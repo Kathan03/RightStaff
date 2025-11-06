@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(echo:*)",
+      "Bash(backend/app/models/__init__.py)",
+      "Bash(backend/app/services/__init__.py)",
+      "Bash(backend/app/api/__init__.py)",
+      "Bash(backend/app/utils/__init__.py)",
+      "Bash(backend/tests/__init__.py)",
+      "Bash(test:*)",
+      "Bash(docker-compose:*)",
+      "Bash(nul)",
+      "Bash(docker ps:*)",
+      "Bash(timeout 30 bash:*)",
+      "Bash(python:*)",
+      "Bash(venv/Scripts/python -m pip install:*)",
+      "Bash(venv/Scripts/pip install:*)",
+      "Bash(venv/Scripts/python:*)",
+      "Bash(curl:*)",
+      "Bash(../venv/Scripts/python -c \"import fastapi; import qdrant_client; import sentence_transformers; print(''All imports successful!'')\")",
+      "Bash(docker logs:*)",
+      "Bash(timeout 10 ../venv/Scripts/python:*)",
+      "Bash(claude config set:*)",
+      "Bash(claude config:*)",
+      "Bash(dir:*)",
+      "Bash(cls)",
+      "Bash(clear)",
+      "Bash(docker --version)",
+      "Bash(psql --version)",
+      "Bash(net stop:*)",
+      "Bash(cat:*)",
+      "Bash(docker volume rm:*)",
+      "Bash(findstr:*)",
+      "Bash(../venv/Scripts/python:*)",
+      "Bash(timeout 10 bash:*)",
+      "Bash(timeout 30 ../venv/Scripts/python:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

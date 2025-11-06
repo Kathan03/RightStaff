@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RightStaff AI - Test Harness</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 32px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 16px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+
+        input[type="text"],
+        input[type="file"],
+        textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+            font-family: inherit;
+        }
+
+        button {
+            background: #667eea;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #5568d3;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e8f4f8;
+            border-radius: 6px;
+            border-left: 4px solid #17a2b8;
+            display: none;
+        }
+
+        .result.error {
+            background: #f8d7da;
+            border-left-color: #dc3545;
+        }
+
+        .result.success {
+            background: #d4edda;
+            border-left-color: #28a745;
+        }
+
+        .result pre {
+            margin-top: 10px;
+            padding: 10px;
+            background: white;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+
+        .status {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status.online {
+            background: #28a745;
+        }
+
+        .status.offline {
+            background: #dc3545;
+        }
+
+        .links {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .link {
+            display: inline-block;
+            padding: 8px 16px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+
+        .link:hover {
+            background: #5568d3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 RightStaff AI Backend</h1>
+        <p class="subtitle">Test Harness for Resume Ingestion & Candidate Ranking</p>
+
+        <!-- Health Status -->
+        <div class="section">
+            <h2>System Status</h2>
+            <div id="health-status">
+                <p><span class="status offline"></span> Checking services...</p>
+            </div>
+            <div class="links" style="margin-top: 15px;">
+                <a href="http://localhost:8000/docs" class="link" target="_blank">API Docs</a>
+                <a href="http://localhost:6333/dashboard" class="link" target="_blank">Qdrant</a>
+                <a href="http://localhost:9001" class="link" target="_blank">MinIO</a>
+            </div>
+        </div>
+
+        <!-- Resume Upload -->
+        <div class="section">
+            <h2>1. Upload Resume</h2>
+            <form id="upload-form">
+                <div class="form-group">
+                    <label for="candidate-id">Candidate ID:</label>
+                    <input type="text" id="candidate-id" placeholder="e.g., candidate-001" required>
+                </div>
+                <div class="form-group">
+                    <label for="resume-file">Resume File (PDF, DOCX, TXT):</label>
+                    <input type="file" id="resume-file" accept=".pdf,.docx,.txt" required>
+                </div>
+                <button type="submit">Upload Resume</button>
+            </form>
+            <div class="result" id="upload-result"></div>
+        </div>
+
+        <!-- Candidate Ranking -->
+        <div class="section">
+            <h2>2. Rank Candidates</h2>
+            <form id="ranking-form">
+                <div class="form-group">
+                    <label for="job-id">Job ID:</label>
+                    <input type="text" id="job-id" placeholder="e.g., 12345" required>
+                </div>
+                <div class="form-group">
+                    <label for="job-description">Job Description:</label>
+                    <textarea id="job-description" placeholder="Enter job description..." required></textarea>
+                </div>
+                <div class="form-group">
+                    <label for="required-skills">Required Skills (comma-separated):</label>
+                    <input type="text" id="required-skills" placeholder="e.g., Python, React, AWS">
+                </div>
+                <button type="submit">Rank Candidates</button>
+            </form>
+            <div class="result" id="ranking-result"></div>
+        </div>
+    </div>
+
+    <script>
+        // Check health status on load
+        async function checkHealth() {
+            try {
+                const response = await fetch('http://localhost:8000/health');
+                const data = await response.json();
+
+                let statusHtml = '';
+                if (data.status === 'healthy') {
+                    statusHtml = '<p><span class="status online"></span> All systems operational</p>';
+                } else {
+                    statusHtml = '<p><span class="status offline"></span> Some services unavailable</p>';
+                }
+
+                statusHtml += '<ul style="margin-top: 10px; margin-left: 30px;">';
+                for (const [service, status] of Object.entries(data.services)) {
+                    const statusClass = status === 'ok' ? 'online' : 'offline';
+                    statusHtml += `<li><span class="status ${statusClass}"></span> ${service}: ${status}</li>`;
+                }
+                statusHtml += '</ul>';
+
+                document.getElementById('health-status').innerHTML = statusHtml;
+            } catch (error) {
+                document.getElementById('health-status').innerHTML =
+                    '<p><span class="status offline"></span> Backend not responding. Is it running?</p>';
+            }
+        }
+
+        // Upload resume
+        document.getElementById('upload-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const candidateId = document.getElementById('candidate-id').value;
+            const file = document.getElementById('resume-file').files[0];
+            const resultDiv = document.getElementById('upload-result');
+
+            resultDiv.style.display = 'block';
+            resultDiv.className = 'result';
+            resultDiv.innerHTML = '<p>Uploading resume...</p>';
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`http://localhost:8000/api/candidates/upload?candidate_id=${candidateId}`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `
+                        <p><strong>Success!</strong></p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `
+                        <p><strong>Error:</strong> ${data.message || 'Upload failed'}</p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `<p><strong>Error:</strong> ${error.message}</p>`;
+            }
+        });
+
+        // Rank candidates
+        document.getElementById('ranking-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const jobId = document.getElementById('job-id').value;
+            const jobDescription = document.getElementById('job-description').value;
+            const requiredSkills = document.getElementById('required-skills').value
+                .split(',')
+                .map(s => s.trim())
+                .filter(s => s);
+
+            const resultDiv = document.getElementById('ranking-result');
+
+            resultDiv.style.display = 'block';
+            resultDiv.className = 'result';
+            resultDiv.innerHTML = '<p>Ranking candidates...</p>';
+
+            try {
+                const response = await fetch('http://localhost:8000/api/jobs/rank', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        job_id: parseInt(jobId),
+                        job_description: jobDescription,
+                        required_skills: requiredSkills,
+                        must_have_skills: [],
+                        top_k: 20,
+                        use_reranker: true
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `
+                        <p><strong>Ranking Results:</strong></p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.innerHTML = `
+                        <p><strong>Error:</strong> ${data.message || 'Ranking failed'}</p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `<p><strong>Error:</strong> ${error.message}</p>`;
+            }
+        });
+
+        // Check health on load
+        checkHealth();
+
+        // Refresh health every 30 seconds
+        setInterval(checkHealth, 30000);
+    </script>
+</body>
+</html>
