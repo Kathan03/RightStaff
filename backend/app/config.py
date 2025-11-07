@@ -4,7 +4,7 @@ Loads settings from environment variables with validation.
 """
 
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 from typing import Optional
 from urllib.parse import quote_plus
 
@@ -47,16 +47,18 @@ class Settings(BaseSettings):
         env="EMBEDDING_MODEL"
     )
     embedding_dim: int = Field(default=384, env="EMBEDDING_DIM")
-    chunk_size: int = Field(default=400, env="CHUNK_SIZE")
-    chunk_overlap: int = Field(default=50, env="CHUNK_OVERLAP")
+    
+    # Text Processing
+    chunk_size: int = Field(default=400, env="CHUNK_SIZE", ge=50, le=2000)
+    chunk_overlap: int = Field(default=50, env="CHUNK_OVERLAP", ge=0, le=500)
 
-    # Cross-Encoder for Re-ranking (MVP)
+    # Cross-Encoder for Re-ranking (MVP - Days 9-10)
     reranker_model: str = Field(
         default="cross-encoder/ms-marco-MiniLM-L-6-v2",
         env="RERANKER_MODEL"
     )
 
-    # OpenAI (optional)
+    # OpenAI (optional, for production)
     openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
 
     # API Settings
@@ -67,6 +69,15 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+
+    @field_validator("chunk_overlap")
+    @classmethod
+    def validate_chunk_overlap(cls, v, info):
+        """Ensure chunk_overlap is less than chunk_size."""
+        chunk_size = info.data.get("chunk_size", 400)
+        if v >= chunk_size:
+            raise ValueError(f"chunk_overlap ({v}) must be less than chunk_size ({chunk_size})")
+        return v
 
     @property
     def database_url(self) -> str:

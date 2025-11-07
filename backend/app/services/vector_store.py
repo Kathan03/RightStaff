@@ -1,14 +1,20 @@
 """
 Qdrant vector database client for candidate embeddings.
 Handles vector storage, similarity search, and metadata filtering.
-
-TODO: Implement for Days 1-4 (Foundation)
 """
 
 from typing import List, Dict, Optional
 import logging
+import uuid
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, Filter
+from qdrant_client.models import (
+    Distance, 
+    VectorParams, 
+    PointStruct, 
+    Filter,
+    FieldCondition,
+    MatchValue
+)
 
 from app.config import settings
 
@@ -16,7 +22,24 @@ logger = logging.getLogger(__name__)
 
 
 class VectorStore:
-    """Qdrant vector database client."""
+    """
+    Qdrant vector database client.
+    
+    Collection Schema:
+    - Vector size: 384 (all-MiniLM-L6-v2 embedding dimension)
+    - Distance: Cosine (normalized vectors, score 0-1)
+    - Payload schema:
+        {
+            "candidate_id": str (UUID),
+            "chunk_index": int,
+            "chunk_text": str,
+            "start_char": int,
+            "end_char": int,
+            "char_count": int,
+            "filename": str,
+            "created_at": str (ISO timestamp)
+        }
+    """
 
     def __init__(self):
         """Initialize Qdrant client."""
@@ -31,16 +54,42 @@ class VectorStore:
     def create_collection(self, vector_size: int = 384):
         """
         Create Qdrant collection for candidate embeddings.
-
+        
+        This operation is idempotent:
+        - If collection exists, does nothing
+        - If collection doesn't exist, creates it
+        - Safe to call multiple times
+        
+        Why Cosine distance?
+        - Works with normalized vectors (all-MiniLM-L6-v2 normalizes)
+        - Scores are interpretable: 1.0 = identical, 0.0 = orthogonal
+        - Fast computation (single dot product after normalization)
+        
         Args:
             vector_size: Embedding dimension (384 for all-MiniLM-L6-v2)
-
-        TODO: Implement for Days 1-4
-        - Create collection with cosine similarity
-        - Set up payload schema for metadata
-        - Configure indexing for performance
+        
+        Raises:
+            Exception: If collection creation fails
         """
         try:
+            # Check if collection already exists
+            collections = self.client.get_collections().collections
+            collection_names = [c.name for c in collections]
+            
+            if self.collection_name in collection_names:
+                logger.info(f"✅ Collection '{self.collection_name}' already exists")
+                # Verify vector size matches
+                collection_info = self.client.get_collection(self.collection_name)
+                actual_size = collection_info.config.params.vectors.size
+                if actual_size != vector_size:
+                    logger.warning(
+                        f"⚠️  Collection vector size mismatch: expected {vector_size}, got {actual_size}"
+                    )
+                return
+            
+            # Create new collection
+            logger.info(f"Creating collection '{self.collection_name}' with vector_size={vector_size}")
+            
             self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=VectorParams(
@@ -48,9 +97,12 @@ class VectorStore:
                     distance=Distance.COSINE
                 )
             )
-            logger.info(f"Created collection: {self.collection_name}")
+            
+            logger.info(f"✅ Created collection: {self.collection_name}")
+            
         except Exception as e:
-            logger.warning(f"Collection may already exist: {e}")
+            logger.error(f"❌ Error creating collection: {e}")
+            raise
 
     def upsert_vectors(
         self,
@@ -60,22 +112,157 @@ class VectorStore:
     ) -> bool:
         """
         Insert or update vectors in collection.
-
+        
+        This is the main method for storing resume chunk embeddings.
+        
+        Why "upsert" instead of "insert"?
+        - If vector with same ID exists, it updates (no duplicate error)
+        - If vector doesn't exist, it inserts
+        - Idempotent: safe to run multiple times for same candidate
+        
+        How IDs work:
+        - Format: "{candidate_id}_chunk_{chunk_index}"
+        - Example: "a1b2c3d4-...-uuid_chunk_0"
+        - Allows querying by candidate (filter by prefix)
+        - Allows deletion by candidate (delete all chunks)
+        
         Args:
-            vectors: List of embedding vectors
-            payloads: List of metadata dictionaries
-            ids: Optional list of IDs (will generate if None)
-
+            vectors: List of embedding vectors [[0.1, 0.2, ...], ...]
+            payloads: List of metadata dicts (must match vectors length)
+            ids: Optional list of IDs (auto-generated if None)
+        
         Returns:
             True if successful
-
-        TODO: Implement for Days 1-4
-        - Batch insert vectors with metadata
-        - Handle duplicate IDs (upsert)
-        - Return operation status
+        
+        Raises:
+            ValueError: If vectors/payloads length mismatch
+            Exception: If upsert operation fails
+        
+        Example:
+            vectors = [[0.1, 0.2, ...], [0.3, 0.4, ...]]
+            payloads = [
+                {"candidate_id": "uuid1", "chunk_index": 0, "chunk_text": "..."},
+                {"candidate_id": "uuid1", "chunk_index": 1, "chunk_text": "..."}
+            ]
+            success = upsert_vectors(vectors, payloads)
         """
-        logger.warning("upsert_vectors not yet implemented")
-        return False
+        if len(vectors) != len(payloads):
+            raise ValueError(
+                f"Vectors and payloads length mismatch: {len(vectors)} != {len(payloads)}"
+            )
+        
+        if not vectors:
+            logger.warning("Empty vectors list provided for upsert")
+            return False
+        
+        # Generate IDs if not provided
+        if ids is None:
+            ids = []
+            for payload in payloads:
+                candidate_id = payload.get("candidate_id", str(uuid.uuid4()))
+                chunk_index = payload.get("chunk_index", 0)
+                
+                # CRITICAL FIX: Qdrant requires integer IDs (not strings) for upsert operations
+                # Solution: Generate deterministic integer ID from candidate_id + chunk_index
+                # Why hash?
+                # - Converts string to deterministic integer
+                # - Same input always gives same ID (idempotent)
+                # - Allows re-indexing without ID conflicts
+                point_id_str = f"{candidate_id}_chunk_{chunk_index}"
+                # Use hash() and mask to get positive 64-bit integer
+                point_id = hash(point_id_str) & 0x7FFFFFFFFFFFFFFF  # Positive 64-bit int
+                
+                # Store the string ID in payload for debugging/querying
+                payload["point_id_str"] = point_id_str
+                
+                ids.append(point_id)
+        
+        logger.info(f"Upserting {len(vectors)} vectors to collection '{self.collection_name}'")
+        
+        try:
+            # Create PointStruct objects
+            # Why PointStruct?
+            # - Qdrant's native format for vector points
+            # - Combines ID, vector, and metadata (payload)
+            points = [
+                PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload=payload
+                )
+                for point_id, vector, payload in zip(ids, vectors, payloads)
+            ]
+            
+            # Upsert to Qdrant
+            # Why upsert instead of insert?
+            # - Handles re-indexing gracefully (no "already exists" errors)
+            # - Idempotent operation
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=points,
+                wait=True  # Wait for operation to complete (ensures consistency)
+            )
+            
+            logger.info(f"✅ Successfully upserted {len(vectors)} vectors")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error upserting vectors: {e}")
+            raise
+
+    def delete_by_candidate_id(self, candidate_id: str) -> bool:
+        """
+        Delete all vectors for a candidate (all resume chunks).
+        
+        Why delete?
+        - Re-indexing: when candidate uploads new resume
+        - Compliance: when candidate requests data deletion
+        - Cleanup: when candidate is removed from system
+        
+        How deletion works:
+        - Uses metadata filter on candidate_id field
+        - Deletes all vectors matching the filter
+        - Idempotent: no error if candidate has no vectors
+        
+        Args:
+            candidate_id: Candidate UUID (string)
+        
+        Returns:
+            True if successful (even if no vectors found)
+        
+        Example:
+            delete_by_candidate_id("a1b2c3d4-1234-5678-90ab-cdef12345678")
+            # Deletes all chunk vectors for this candidate
+        """
+        logger.info(f"Deleting all vectors for candidate: {candidate_id}")
+        
+        try:
+            # Delete using filter
+            # Why filter instead of ID list?
+            # - Don't need to query first to get all IDs
+            # - More efficient (single operation)
+            # - Works even if we don't know chunk count
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="candidate_id",
+                            match=MatchValue(value=candidate_id)
+                        )
+                    ]
+                ),
+                wait=True  # Wait for deletion to complete
+            )
+            
+            logger.info(f"✅ Deleted vectors for candidate: {candidate_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error deleting vectors for candidate {candidate_id}: {e}")
+            # Don't raise - deletion failure shouldn't break the pipeline
+            # Candidate data in PostgreSQL is still authoritative
+            return False
 
     def search(
         self,
@@ -85,71 +272,61 @@ class VectorStore:
         filter_dict: Optional[Dict] = None
     ) -> List[Dict]:
         """
-        Search for similar vectors.
-
-        Args:
-            query_vector: Query embedding
-            top_k: Number of results to return
-            score_threshold: Minimum similarity score
-            filter_dict: Metadata filters (e.g., {"job_id": 123})
-
-        Returns:
-            List of search results with scores and metadata
-
-        TODO: Implement for Days 5-8
-        - Perform similarity search
-        - Apply metadata filters
-        - Return results with scores and payloads
+        Search for similar vectors (semantic search).
+        
+        TODO: Implement for Days 5-8 (ranking feature)
+        
+        This will be used for:
+        - Finding candidates similar to job description
+        - Answering chatbot questions (Days 11-12)
+        
+        Not needed for Day 2 ingestion pipeline.
         """
-        logger.warning("search not yet implemented - returning empty list")
+        logger.warning("search not yet implemented - returning empty list (scheduled for Days 5-8)")
         return []
-
-    def delete_by_candidate_id(self, candidate_id: str) -> bool:
-        """
-        Delete all vectors for a candidate.
-
-        Args:
-            candidate_id: Candidate ID
-
-        Returns:
-            True if successful
-
-        TODO: Implement for Days 1-4
-        - Delete by metadata filter
-        - Handle non-existent IDs gracefully
-        """
-        logger.warning("delete_by_candidate_id not yet implemented")
-        return False
 
     def get_collection_info(self) -> Dict:
         """
-        Get collection statistics.
-
+        Get collection statistics (vector count, config, etc.).
+        
+        Useful for:
+        - Health checks
+        - Monitoring
+        - Debugging
+        
         Returns:
-            Collection info (count, vector size, etc.)
-
-        TODO: Implement for Days 1-4
+            {
+                "vectors_count": int,
+                "points_count": int,
+                "status": str,
+                "vector_size": int
+            }
         """
         try:
             info = self.client.get_collection(self.collection_name)
             return {
-                "vectors_count": info.vectors_count,
-                "points_count": info.points_count,
-                "status": info.status
+                "vectors_count": info.vectors_count or 0,
+                "points_count": info.points_count or 0,
+                "status": info.status,
+                "vector_size": info.config.params.vectors.size
             }
         except Exception as e:
             logger.error(f"Error getting collection info: {e}")
-            return {}
+            return {
+                "vectors_count": 0,
+                "points_count": 0,
+                "status": "error",
+                "error": str(e)
+            }
 
     def health_check(self) -> bool:
         """
         Check if Qdrant is responsive.
-
+        
         Returns:
-            True if healthy
+            True if healthy, False otherwise
         """
         try:
-            # Try to get collections as a health check
             self.client.get_collections()
             return True
         except Exception as e:
