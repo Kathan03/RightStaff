@@ -34,7 +34,13 @@
       "Bash(findstr:*)",
       "Bash(../venv/Scripts/python:*)",
       "Bash(timeout 10 bash:*)",
-      "Bash(timeout 30 ../venv/Scripts/python:*)"
+      "Bash(timeout 30 ../venv/Scripts/python:*)",
+      "Bash(docker exec:*)",
+      "Bash(pip install:*)",
+      "Bash(C:UserskathaAnaconda3python.exe test_ranking_comprehensive.py)",
+      "Bash(mv:*)",
+      "Bash(rm:*)",
+      "Bash(tree:*)"
     ],
     "deny": [],
     "ask": []

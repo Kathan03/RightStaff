@@ -1,16 +1,36 @@
 """
-Job ranking endpoints.
-Main API for candidate ranking based on job descriptions.
+Job ranking endpoints - implements SQL gating (Day 3).
+Vector search will be added in Days 5-8.
 
-TODO: Implement for Days 5-12 (Core Ranking + Advanced Features)
+DAY 3: SQL gating only
+FUTURE: Full semantic ranking pipeline
 """
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional
 import logging
+import json
+from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
-from app.services.ranking import ranker
+from app.database import get_db
+from app.models.candidate import Job, JobStatus
+from app.services.sql_filter import apply_combined_sql_gates
+from app.services.redis_client import redis_client
+
+from decimal import Decimal
+import json
+from fastapi.encoders import jsonable_encoder
+
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)  # Convert to float
+        return super().default(obj)
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -19,126 +39,178 @@ router = APIRouter()
 
 class RankingRequest(BaseModel):
     """Request for candidate ranking."""
-    job_id: int
-    job_description: str
+    job_id: str
+    use_cache: bool = True
+
+
+class JobCreateRequest(BaseModel):
+    """Request to create a job (for testing)."""
+    title: str
+    description: str
     required_skills: List[str]
     must_have_skills: List[str] = []
-    top_k: int = 20
-    use_reranker: bool = True
+    min_years_experience: Optional[float] = None
+    max_years_experience: Optional[float] = None
+    location: Optional[str] = None
 
 
-class RankedCandidate(BaseModel):
-    """Ranked candidate result."""
-    candidate_id: str
-    score: float
-    rank: int
-    explanation: str
-    skills_match: Dict
-    experience_match: Dict
-    citations: List[Dict]
-
-
-@router.post("/rank", response_model=List[RankedCandidate])
-async def rank_candidates(request: RankingRequest):
+@router.post("/", status_code=status.HTTP_201_CREATED)
+async def create_job(
+    request: JobCreateRequest,
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Rank candidates for a job.
-
-    Full ranking pipeline:
-    1. Ontology gate (must-have skills)
-    2. Dense retrieval (semantic search)
-    3. Structured scoring
-    4. Cross-encoder re-ranking (optional)
-    5. Explanation generation
-
+    Create a new job posting (for testing).
+    
     Args:
-        request: Ranking request with job details
-
+        request: Job creation data
+        db: Database session
+    
     Returns:
-        List of ranked candidates with explanations
-
-    TODO: Implement for Days 5-12
-    This is the PRIMARY MVP feature!
+        Created job metadata
     """
-    logger.info(f"Ranking candidates for job {request.job_id}")
+    job = Job(
+        title=request.title,
+        description=request.description,
+        required_skills_json=request.required_skills,
+        must_have_skills_json=request.must_have_skills,
+        min_years_experience=request.min_years_experience,
+        max_years_experience=request.max_years_experience,
+        location=request.location,
+        status=JobStatus.open
+    )
+    
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+    
+    logger.info(f"✅ Created job: {job.title} (ID: {job.id})")
+    
+    return {
+        "job_id": str(job.id),
+        "title": job.title,
+        "status": "created"
+    }
 
-    # TODO: Call ranker.rank_candidates()
 
-    return []
+@router.post("/rank")
+async def rank_candidates(
+    request: RankingRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Trigger candidate ranking for a job.
+    
+    Day 3: SQL gating only (must-have skills, years, location)
+    Days 5-8: Will add vector search + semantic ranking
+    
+    Args:
+        request: Ranking request (job_id, use_cache)
+        db: Database session
+    
+    Returns:
+        Ranking results with qualified candidate IDs
+    """
+    try:
+        # Fetch job
+        result = await db.execute(
+            select(Job).where(Job.id == request.job_id)
+        )
+        job = result.scalar_one_or_none()
+        
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Job {request.job_id} not found")
+        
+        logger.info(f"🎯 Ranking candidates for job: {job.title}")
+        
+        # Apply SQL gating
+        qualified_candidate_ids = await apply_combined_sql_gates(
+            must_have_skills=job.must_have_skills_json or [],
+            min_years_experience=float(job.min_years_experience) if job.min_years_experience else None,
+            max_years_experience=float(job.max_years_experience) if job.max_years_experience else None,
+            preferred_location=job.location,
+            db=db
+        )
+        
+        # Cache results
+        cache_key = f"job_rankings:{request.job_id}"
+        ranking_data = {
+            "job_id": str(job.id),
+            "qualified_candidate_ids": list(qualified_candidate_ids),
+            "total_qualified": len(qualified_candidate_ids),
+            "computed_at": datetime.utcnow().isoformat(),  # pyright: ignore[reportDeprecated]
+            "gates_applied": {
+                "must_have_skills": job.must_have_skills_json or [],
+                # Convert Decimal to float for JSON serialization
+                "min_years": float(job.min_years_experience) if job.min_years_experience is not None else None,
+                "max_years": float(job.max_years_experience) if job.max_years_experience is not None else None,
+                "location": job.location
+            }
+        }
+
+        # Use DecimalEncoder as fallback for any remaining Decimal objects
+        await redis_client.set(cache_key, json.dumps(ranking_data, cls=DecimalEncoder), ex=3600)
+        
+        logger.info(f"✅ Ranking complete: {len(qualified_candidate_ids)} qualified candidates")
+        
+        # return {
+        #     "status": "completed",
+        #     "job_id": str(job.id),
+        #     "job_title": job.title,
+        #     "total_qualified": len(qualified_candidate_ids),
+        #     "pipeline_stage": "sql_gating_only",
+        #     "note": "Full semantic ranking will be added in Days 5-8"
+        # }
+        return jsonable_encoder({
+            "status": "completed",
+            "job_id": str(job.id),
+            "job_title": job.title,
+            "total_qualified": len(qualified_candidate_ids),
+            "pipeline_stage": "sql_gating_only", 
+            "note": "Full semantic ranking will be added in Days 5-8"
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error ranking candidates: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{job_id}/rankings")
 async def get_job_rankings(
-    job_id: int,
-    top_k: int = 20,
-    use_cache: bool = True
+    job_id: str,
+    top_k: int = 20
 ):
     """
     Get cached rankings for a job.
-
+    
     Args:
-        job_id: Job ID
-        top_k: Number of results
-        use_cache: Whether to use Redis cache
-
+        job_id: Job UUID
+        top_k: Number of results to return
+    
     Returns:
-        Cached rankings or empty list
-
-    TODO: Implement for Days 5-12
-    - Check Redis cache first
-    - Return cached results if available
-    - Otherwise return empty (trigger new ranking)
+        Cached ranking results
     """
-    logger.info(f"Fetching rankings for job {job_id}")
-
+    cache_key = f"job_rankings:{job_id}"
+    cached_data = await redis_client.get(cache_key)
+    
+    if not cached_data:
+        return {
+            "job_id": job_id,
+            "status": "not_found",
+            "message": "No rankings found. Trigger ranking first via POST /jobs/rank"
+        }
+    
+    ranking_data = json.loads(cached_data)
+    qualified_ids = ranking_data["qualified_candidate_ids"][:top_k]
+    
     return {
         "job_id": job_id,
-        "status": "not_implemented",
-        "message": "Ranking retrieval will be implemented in Days 5-12"
-    }
-
-
-@router.get("/{job_id}/candidates/{candidate_id}/explanation")
-async def get_ranking_explanation(job_id: int, candidate_id: str):
-    """
-    Get detailed explanation for a candidate's ranking.
-
-    Args:
-        job_id: Job ID
-        candidate_id: Candidate ID
-
-    Returns:
-        Detailed explanation with citations
-
-    TODO: Implement for Days 9-12
-    """
-    logger.info(f"Fetching explanation for job {job_id}, candidate {candidate_id}")
-
-    return {
-        "job_id": job_id,
-        "candidate_id": candidate_id,
-        "status": "not_implemented",
-        "message": "Explanation generation will be implemented in Days 9-12"
-    }
-
-
-@router.post("/{job_id}/rerank")
-async def rerank_candidates(job_id: int):
-    """
-    Re-run ranking for a job.
-    Clears cache and re-ranks all candidates.
-
-    Args:
-        job_id: Job ID
-
-    Returns:
-        Re-ranking result
-
-    TODO: Implement for Days 5-12
-    """
-    logger.info(f"Re-ranking candidates for job {job_id}")
-
-    return {
-        "job_id": job_id,
-        "status": "not_implemented",
-        "message": "Re-ranking will be implemented in Days 5-12"
+        "status": "found",
+        "total_qualified": ranking_data["total_qualified"],
+        "returned_count": len(qualified_ids),
+        "candidate_ids": qualified_ids,
+        "computed_at": ranking_data["computed_at"],
+        "gates_applied": ranking_data["gates_applied"]
     }

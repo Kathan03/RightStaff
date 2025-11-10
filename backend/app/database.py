@@ -9,6 +9,15 @@ from sqlalchemy import text
 from app.config import settings
 from app.utils.logging import logger
 
+
+from decimal import Decimal
+import json
+
+def default_encoder(obj):
+    if isinstance(obj, Decimal):
+        return float(obj)
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
 # Create async engine with connection pooling
 # Why async? FastAPI is async, so we need async database queries
 engine = create_async_engine(
@@ -18,6 +27,7 @@ engine = create_async_engine(
     pool_size=10,                      # Number of persistent connections
     max_overflow=20,                   # Additional connections under load
     pool_recycle=3600,                 # Recycle connections after 1 hour
+    json_serializer=lambda obj: json.dumps(obj, default=default_encoder)
 )
 
 # Session factory - creates new database sessions
