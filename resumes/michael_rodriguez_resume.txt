@@ -1,0 +1,43 @@
+MICHAEL RODRIGUEZ
+Data Engineer
+Email: m.rodriguez@example.com | Phone: +1-512-555-0202
+Location: Austin, TX
+
+PROFESSIONAL SUMMARY
+Data Engineer with 5 years of experience specializing in big data pipelines and ML infrastructure. Expertise with Apache Spark, Kafka, and modern data warehousing solutions. Strong background in Python and SQL optimization. Built data platforms processing 5TB+ daily.
+
+TECHNICAL SKILLS
+- Languages: Python, SQL, Scala
+- Big Data: Apache Spark, Hadoop, Kafka, Airflow
+- Databases: PostgreSQL, MySQL, Snowflake, Cassandra
+- Cloud: AWS (EMR, S3, Redshift, Glue), Azure
+- Tools: Docker, Git, Databricks, dbt
+
+PROFESSIONAL EXPERIENCE
+
+Data Engineer | DataCo | Austin, TX
+July 2019 - Present
+- Built and maintained ETL pipelines processing 5TB of data daily using Apache Spark
+- Designed data lake architecture on AWS S3, reducing storage costs by 35%
+- Implemented real-time streaming pipelines using Kafka for event processing
+- Optimized SQL queries, reducing average query time from 45s to 8s
+- Collaborated with data scientists to deploy ML models to production
+- Created data quality monitoring dashboards using Grafana
+
+Data Analyst | TechStartup | Austin, TX
+June 2017 - June 2019
+- Performed data analysis and created visualizations using Python and Tableau
+- Built automated reporting systems, saving 20 hours/week of manual work
+- Designed and implemented PostgreSQL database schema
+
+EDUCATION
+Bachelor of Science in Computer Science | UT Austin | 2019
+Relevant Coursework: Database Systems, Machine Learning, Distributed Systems
+
+CERTIFICATIONS
+- AWS Certified Data Analytics Specialty
+- Databricks Certified Associate Developer for Apache Spark
+
+PROJECTS
+- Real-time Fraud Detection System: Built streaming pipeline processing 100K transactions/minute
+- Customer 360 Data Platform: Unified customer data from 15+ sources into single view

@@ -184,27 +184,27 @@ async def get_job_rankings(
 ):
     """
     Get cached rankings for a job.
-    
+
     Args:
         job_id: Job UUID
         top_k: Number of results to return
-    
+
     Returns:
         Cached ranking results
     """
     cache_key = f"job_rankings:{job_id}"
     cached_data = await redis_client.get(cache_key)
-    
+
     if not cached_data:
         return {
             "job_id": job_id,
             "status": "not_found",
             "message": "No rankings found. Trigger ranking first via POST /jobs/rank"
         }
-    
+
     ranking_data = json.loads(cached_data)
     qualified_ids = ranking_data["qualified_candidate_ids"][:top_k]
-    
+
     return {
         "job_id": job_id,
         "status": "found",
@@ -214,3 +214,96 @@ async def get_job_rankings(
         "computed_at": ranking_data["computed_at"],
         "gates_applied": ranking_data["gates_applied"]
     }
+
+
+# ========================================
+# NEW DAY 4: Complete Ranking Pipeline
+# ========================================
+
+from app.services.ranking import ranking_service
+from pydantic import UUID4
+
+
+class RankedCandidateResponse(BaseModel):
+    """Response for a single ranked candidate."""
+    candidate_id: str
+    final_score: float
+    band: str
+    confidence: float
+    summary: str
+    reasons: List[str]
+    evidence_snippets: List[dict]
+    score_breakdown: dict
+
+
+class RankingResponse(BaseModel):
+    """Complete ranking response."""
+    job_id: str
+    ranked_candidates: List[RankedCandidateResponse]
+    metadata: dict
+
+
+class FullRankingRequest(BaseModel):
+    """Request for full ranking with all pipeline stages."""
+    use_cache: bool = True
+
+
+@router.post("/{job_id}/rank_full", response_model=RankingResponse)
+async def rank_candidates_full(
+    job_id: str,
+    request: FullRankingRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generate complete ranked candidate list for a job (Day 4).
+
+    This is the main ranking endpoint that:
+    1. Applies SQL gates (hard filters)
+    2. Performs semantic search (dense retrieval)
+    3. Calculates structured scores
+    4. Blends scores and bands candidates
+    5. Generates explanations
+    6. Returns ranked list with evidence
+
+    Cache TTL: 5 minutes
+    """
+    try:
+        # Call ranking service
+        results = await ranking_service.rank_candidates(
+            job_id=job_id,
+            filters=None,
+            use_cache=request.use_cache
+        )
+
+        # Convert to response format
+        ranked_candidates = [
+            RankedCandidateResponse(
+                candidate_id=r.candidate_id,
+                final_score=r.final_score,
+                band=r.band,
+                confidence=r.confidence,
+                summary=r.summary,
+                reasons=r.reasons,
+                evidence_snippets=r.evidence_snippets,
+                score_breakdown=r.score_breakdown
+            )
+            for r in results
+        ]
+
+        return RankingResponse(
+            job_id=job_id,
+            ranked_candidates=ranked_candidates,
+            metadata={
+                'total_candidates': len(results),
+                'high_confidence': len([r for r in results if r.band == 'high']),
+                'medium_confidence': len([r for r in results if r.band == 'medium']),
+                'low_confidence': len([r for r in results if r.band == 'low'])
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Ranking failed for job {job_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ranking failed: {str(e)}"
+        )

@@ -264,26 +264,155 @@ class VectorStore:
             # Candidate data in PostgreSQL is still authoritative
             return False
 
+    async def upsert_points(
+        self,
+        points: List[Dict],
+        collection_name: Optional[str] = None
+    ) -> bool:
+        """
+        Upsert points in dictionary format (alternative to upsert_vectors).
+
+        This method accepts points as list of dicts (used by job_embeddings service).
+
+        Args:
+            points: List of point dicts with structure:
+                [
+                    {
+                        "id": str or int,
+                        "vector": List[float],
+                        "payload": Dict
+                    },
+                    ...
+                ]
+            collection_name: Collection to upsert to (default: self.collection_name)
+
+        Returns:
+            True if successful
+
+        Example:
+            points = [
+                {
+                    "id": "job_123_profile",
+                    "vector": [0.1, 0.2, ...],
+                    "payload": {"job_id": "123", "kind": "profile"}
+                }
+            ]
+            success = await vector_store.upsert_points(points)
+        """
+        if not points:
+            logger.warning("Empty points list provided for upsert")
+            return False
+
+        collection = collection_name or self.collection_name
+
+        try:
+            logger.info(f"Upserting {len(points)} points to collection '{collection}'")
+
+            # Convert dict format to PointStruct objects
+            point_structs = []
+            for point in points:
+                point_id = point["id"]
+
+                # Convert string IDs to deterministic integers
+                if isinstance(point_id, str):
+                    point_id = hash(point_id) & 0x7FFFFFFFFFFFFFFF
+
+                point_structs.append(
+                    PointStruct(
+                        id=point_id,
+                        vector=point["vector"],
+                        payload=point.get("payload", {})
+                    )
+                )
+
+            # Upsert to Qdrant
+            self.client.upsert(
+                collection_name=collection,
+                points=point_structs,
+                wait=True
+            )
+
+            logger.info(f"✅ Successfully upserted {len(points)} points")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Error upserting points: {e}")
+            raise
+
     def search(
         self,
         query_vector: List[float],
         top_k: int = 10,
         score_threshold: Optional[float] = None,
-        filter_dict: Optional[Dict] = None
-    ) -> List[Dict]:
+        filter_dict: Optional[Dict] = None,
+        collection_name: Optional[str] = None,
+        with_payload: bool = True
+    ) -> List:
         """
         Search for similar vectors (semantic search).
-        
-        TODO: Implement for Days 5-8 (ranking feature)
-        
-        This will be used for:
+
+        Used for:
         - Finding candidates similar to job description
+        - Dense retrieval in ranking pipeline
         - Answering chatbot questions (Days 11-12)
-        
-        Not needed for Day 2 ingestion pipeline.
+
+        Args:
+            query_vector: Query embedding vector
+            top_k: Number of results to return
+            score_threshold: Minimum similarity score (0-1, cosine distance)
+            filter_dict: Qdrant filter dictionary for metadata filtering
+            collection_name: Collection to search (default: self.collection_name)
+            with_payload: Whether to include payload in results
+
+        Returns:
+            List of Qdrant ScoredPoint objects with:
+                - id: Point ID
+                - score: Similarity score (0-1, higher is better)
+                - payload: Metadata dict (if with_payload=True)
+
+        Example:
+            results = vector_store.search(
+                query_vector=[0.1, 0.2, ...],
+                top_k=20,
+                filter_dict={
+                    "must": [
+                        {"key": "candidate_id", "match": {"any": ["uuid1", "uuid2"]}}
+                    ]
+                }
+            )
         """
-        logger.warning("search not yet implemented - returning empty list (scheduled for Days 5-8)")
-        return []
+        try:
+            collection = collection_name or self.collection_name
+
+            # Build search query
+            search_params = {
+                "collection_name": collection,
+                "query_vector": query_vector,
+                "limit": top_k,
+                "with_payload": with_payload
+            }
+
+            # Add score threshold if specified
+            if score_threshold is not None:
+                search_params["score_threshold"] = score_threshold
+
+            # Add filter if specified
+            if filter_dict:
+                search_params["query_filter"] = Filter(**filter_dict)
+
+            # Execute search
+            results = self.client.search(**search_params)
+
+            logger.info(
+                f"Search returned {len(results)} results from '{collection}' "
+                f"(top_k={top_k}, filtered={filter_dict is not None})"
+            )
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Error searching vectors: {e}")
+            raise
 
     def get_collection_info(self) -> Dict:
         """

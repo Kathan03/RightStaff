@@ -255,12 +255,23 @@ CREATE TABLE IF NOT EXISTS candidate_preferred_company_size (
 -- ===========================================================
 
 CREATE TABLE IF NOT EXISTS job (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  title       text NOT NULL,
-  department  text,
-  location    text,
-  status      job_status_enum NOT NULL DEFAULT 'draft',
-  created_at  timestamptz NOT NULL DEFAULT now()
+  id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  title                   text NOT NULL,
+  description             text,
+  department              text,
+  location                text,
+  status                  job_status_enum NOT NULL DEFAULT 'draft',
+
+  -- AI ranking fields (Day 3)
+  required_skills_json    jsonb,
+  must_have_skills_json   jsonb,
+  min_years_experience    numeric(5,2),
+  max_years_experience    numeric(5,2),
+  work_arrangement        text,
+  employment_type         text,
+
+  created_at              timestamptz NOT NULL DEFAULT now(),
+  updated_at              timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS application (
@@ -290,6 +301,12 @@ END$$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_candidate_touch ON candidate;
 CREATE TRIGGER trg_candidate_touch
 BEFORE UPDATE ON candidate
+FOR EACH ROW
+EXECUTE FUNCTION touch_updated_at();
+
+DROP TRIGGER IF EXISTS trg_job_touch ON job;
+CREATE TRIGGER trg_job_touch
+BEFORE UPDATE ON job
 FOR EACH ROW
 EXECUTE FUNCTION touch_updated_at();
 

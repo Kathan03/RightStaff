@@ -1,212 +1,377 @@
+# backend/app/services/ranking.py
 """
-Candidate ranking service with cross-encoder re-ranking.
-Implements the full ranking pipeline: ontology gate → dense retrieval → re-ranking.
-
-TODO: Implement for Days 5-12 (Core Ranking + Advanced Features)
-This is the PRIMARY MVP feature!
+Main ranking service that orchestrates the complete pipeline.
+Combines SQL gating, dense retrieval, structured scoring, and explanations.
 """
 
 from typing import List, Dict, Optional
+from dataclasses import dataclass
+from datetime import datetime
+import json
+import hashlib
 import logging
-from sentence_transformers import CrossEncoder
 
-from app.services.vector_store import vector_store
-from app.utils.skills import apply_ontology_gate, match_skills
-from app.config import settings
+from app.services.sql_filter import apply_combined_sql_gates
+from app.services.retrieval import dense_retriever
+from app.services.scoring import structured_scorer
+from app.services.explanation import explanation_generator
+from app.services.redis_client import redis_client
+from app.utils.logging import logger
+from app.database import AsyncSessionLocal
+from app.models.candidate import Job, Candidate, CandidateContact, CandidateSkill, Skill
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
-logger = logging.getLogger(__name__)
+
+@dataclass
+class RankedCandidate:
+    """Final ranked candidate with all scores and explanations."""
+    candidate_id: str
+    final_score: float
+    band: str  # 'high', 'medium', 'low'
+    confidence: float
+    summary: str
+    reasons: List[str]
+    evidence_snippets: List[Dict]
+    score_breakdown: Dict
 
 
-class CandidateRanker:
-    """Candidate ranking with semantic search and cross-encoder re-ranking."""
+class RankingService:
+    """
+    Orchestrates the complete ranking pipeline.
+
+    Pipeline from PRD:
+    1. SQL gating (hard filters)
+    2. Dense retrieval (semantic search)
+    3. Structured scoring (objective metrics)
+    4. Score blending (weighted combination)
+    5. Banding (confidence levels)
+    6. Explanation generation
+    """
+
+    # Final score weights from PRD
+    WEIGHTS = {
+        'dense': 0.40,
+        'structured': 0.35,
+        'pairwise': 0.00,  # Day 10 - cross-encoder
+        'completeness': 0.25
+    }
 
     def __init__(self):
-        """Initialize embedding model and cross-encoder."""
-        # TODO: Load embedding model for job description encoding
-        # self.embedding_model = SentenceTransformer(settings.embedding_model)
-
-        # TODO: Load cross-encoder for re-ranking (Days 9-10)
-        # self.reranker = CrossEncoder(settings.reranker_model)
-
-        logger.info("CandidateRanker initialized (TODO: load models)")
+        self.cache_ttl = 300  # 5 minute cache
 
     async def rank_candidates(
         self,
-        job_id: int,
-        job_description: str,
-        required_skills: List[str],
-        must_have_skills: List[str],
-        top_k: int = 20,
-        use_reranker: bool = True
-    ) -> List[Dict]:
+        job_id: str,
+        filters: Optional[Dict] = None,
+        use_cache: bool = True
+    ) -> List[RankedCandidate]:
         """
-        Full candidate ranking pipeline.
-
-        Pipeline:
-        1. Ontology Gate: Filter candidates with must-have skills
-        2. Dense Retrieval: Semantic search in Qdrant (get top 50-100)
-        3. Structured Scoring: Add years_experience, recency, location scores
-        4. Cross-Encoder Re-Ranking: Pairwise scoring (top 20)
-        5. Generate Explanations: Citations to evidence chunks
+        Main ranking entry point.
 
         Args:
-            job_id: Job posting ID
-            job_description: Full job description text
-            required_skills: List of required skills
-            must_have_skills: Non-negotiable skills (ontology gate)
-            top_k: Number of final results
-            use_reranker: Whether to use cross-encoder re-ranking
+            job_id: Job to rank for
+            filters: Additional filters (city, salary, etc.)
+            use_cache: Whether to use cached results
 
         Returns:
-            List of ranked candidates with scores and explanations
-
-        TODO: Implement for Days 5-12
+            List of ranked candidates with explanations
         """
-        logger.warning(f"rank_candidates not yet implemented for job {job_id}")
+        # Generate cache key
+        cache_key = self._generate_cache_key(job_id, filters)
 
-        return []
+        # Check cache
+        if use_cache:
+            cached = await redis_client.get(cache_key)
+            if cached:
+                logger.info(f"✅ Using cached ranking for job {job_id}")
+                return self._deserialize_ranking(json.loads(cached))
 
-    def _apply_ontology_gate(
+        logger.info(f"🎯 Starting ranking pipeline for job {job_id}")
+
+        # Step 1: Get job data
+        job_data = await self._fetch_job_data(job_id)
+
+        # Step 2: SQL gating
+        eligible_candidate_ids = await apply_combined_sql_gates(
+            must_have_skills=job_data.get('must_have_skills_json', []),
+            min_years_experience=job_data.get('min_years_experience'),
+            max_years_experience=job_data.get('max_years_experience'),
+            preferred_location=job_data.get('location')
+        )
+        logger.info(f"📊 {len(eligible_candidate_ids)} candidates passed SQL gates")
+
+        if not eligible_candidate_ids:
+            return []
+
+        # Step 2b: Fetch full candidate data
+        eligible_candidates = await self._fetch_candidates_data(list(eligible_candidate_ids))
+
+        # Step 3: Dense retrieval
+        retrieval_results = await dense_retriever.retrieve_candidates(
+            job_data,
+            [c['id'] for c in eligible_candidates],
+            top_k=100
+        )
+
+        # Step 4: Structured scoring
+        structured_scores = {}
+        for candidate in eligible_candidates:
+            score = await structured_scorer.calculate_score(candidate, job_data)
+            structured_scores[candidate['id']] = score
+
+        # Step 5: Calculate completeness scores
+        completeness_scores = self._calculate_completeness_scores(eligible_candidates)
+
+        # Step 6: Blend scores
+        blended_results = self._blend_scores(
+            retrieval_results,
+            structured_scores,
+            completeness_scores
+        )
+
+        # Step 7: Band candidates
+        banded_results = self._band_candidates(blended_results)
+
+        # Step 8: Generate explanations
+        final_results = []
+        for result in banded_results[:50]:  # Top 50 only
+            explanation = await explanation_generator.generate(
+                result,
+                job_data,
+                retrieval_results,
+                structured_scores
+            )
+
+            final_results.append(RankedCandidate(
+                candidate_id=result['candidate_id'],
+                final_score=result['final_score'],
+                band=result['band'],
+                confidence=result['confidence'],
+                summary=explanation['summary'],
+                reasons=explanation['reasons'],
+                evidence_snippets=explanation['evidence'],
+                score_breakdown=result['scores']
+            ))
+
+        # Cache results
+        if use_cache:
+            cache_value = json.dumps(self._serialize_ranking(final_results))
+            await redis_client.set(cache_key, cache_value, ex=self.cache_ttl)
+
+        logger.info(f"✅ Ranking complete: {len(final_results)} candidates")
+        return final_results
+
+    def _blend_scores(
         self,
-        candidates: List[Dict],
-        must_have_skills: List[str]
+        retrieval_results,
+        structured_scores,
+        completeness_scores
     ) -> List[Dict]:
         """
-        Filter candidates by must-have skills.
+        Blend all scoring components.
 
-        Args:
-            candidates: List of candidates from DB
-            must_have_skills: Required skills
+        Formula from PRD:
+        final = 0.40 * dense + 0.35 * structured + 0.25 * completeness
 
-        Returns:
-            Filtered candidates
-
-        TODO: Implement for Days 5-8
+        IMPORTANT: Iterate over ALL candidates from structured_scores, not just
+        those in retrieval_results. This ensures ranking works even when Qdrant
+        is empty or missing vectors.
         """
-        logger.warning("_apply_ontology_gate not yet implemented")
+        blended = []
+
+        # Build lookup dict for dense scores
+        dense_scores_map = {}
+        for retrieval in retrieval_results:
+            dense_scores_map[retrieval.candidate_id] = retrieval.combined_score
+
+        # Iterate over ALL candidates who passed SQL gating
+        for candidate_id, structured in structured_scores.items():
+            # Get all score components (use 0 if missing)
+            dense_score = dense_scores_map.get(candidate_id, 0.0)
+            structured_score = structured.combined_score if structured else 0.0
+            completeness_score = completeness_scores.get(candidate_id, 0.5)
+
+            # Weighted combination
+            final_score = (
+                self.WEIGHTS['dense'] * dense_score +
+                self.WEIGHTS['structured'] * structured_score +
+                self.WEIGHTS['completeness'] * completeness_score
+            )
+
+            blended.append({
+                'candidate_id': candidate_id,
+                'final_score': final_score,
+                'scores': {
+                    'dense': dense_score,
+                    'structured': structured_score,
+                    'completeness': completeness_score
+                }
+            })
+
+        # Sort by final score
+        blended.sort(key=lambda x: x['final_score'], reverse=True)
+        return blended
+
+    def _band_candidates(self, candidates: List[Dict]) -> List[Dict]:
+        """
+        Band candidates into confidence levels.
+
+        From PRD:
+        - High: top 20% (confidence > 0.8)
+        - Medium: 20-60% (confidence 0.5-0.8)
+        - Low: bottom 40% (confidence < 0.5)
+        """
+        if not candidates:
+            return []
+
+        # Calculate percentiles
+        scores = [c['final_score'] for c in candidates]
+        p80 = sorted(scores)[int(len(scores) * 0.8)] if len(scores) > 4 else scores[0]
+        p40 = sorted(scores)[int(len(scores) * 0.4)] if len(scores) > 2 else scores[-1]
+
+        for candidate in candidates:
+            score = candidate['final_score']
+
+            if score >= p80:
+                candidate['band'] = 'high'
+                candidate['confidence'] = min(1.0, 0.8 + (score - p80) * 0.2)
+            elif score >= p40:
+                candidate['band'] = 'medium'
+                candidate['confidence'] = 0.5 + (score - p40) * 0.3
+            else:
+                candidate['band'] = 'low'
+                candidate['confidence'] = score * 0.5
+
         return candidates
 
-    def _dense_retrieval(
+    def _calculate_completeness_scores(
         self,
-        job_description: str,
-        top_k: int = 100
-    ) -> List[Dict]:
-        """
-        Semantic search using vector similarity.
-
-        Args:
-            job_description: Job description to encode
-            top_k: Number of candidates to retrieve
-
-        Returns:
-            List of candidates with similarity scores
-
-        TODO: Implement for Days 5-8
-        Steps:
-        1. Encode job description to vector
-        2. Search Qdrant for similar candidates
-        3. Return top_k results with scores
-        """
-        logger.warning("_dense_retrieval not yet implemented")
-        return []
-
-    def _structured_scoring(
-        self,
-        candidates: List[Dict],
-        job_metadata: Dict
-    ) -> List[Dict]:
-        """
-        Add structured scores (years_experience, location, recency).
-
-        Args:
-            candidates: Candidates from dense retrieval
-            job_metadata: Job requirements (years_exp, location, etc.)
-
-        Returns:
-            Candidates with additional scores
-
-        TODO: Implement for Days 5-8
-        Scoring components:
-        - Years of experience match (linear scoring)
-        - Location match (exact or distance-based)
-        - Resume recency (newer = better)
-        - Education level match
-        """
-        logger.warning("_structured_scoring not yet implemented")
-        return candidates
-
-    def _cross_encoder_rerank(
-        self,
-        job_description: str,
-        candidates: List[Dict],
-        top_k: int = 20
-    ) -> List[Dict]:
-        """
-        Re-rank using cross-encoder for pairwise scoring.
-
-        Args:
-            job_description: Full job description
-            candidates: Candidates from dense retrieval
-            top_k: Number of final results
-
-        Returns:
-            Re-ranked candidates
-
-        TODO: Implement for Days 9-10 (MVP FEATURE)
-        Steps:
-        1. Create pairs: (job_description, candidate_resume)
-        2. Score each pair using CrossEncoder
-        3. Re-sort by cross-encoder scores
-        4. Return top_k
-        """
-        logger.warning("_cross_encoder_rerank not yet implemented")
-        return candidates[:top_k]
-
-    def _generate_explanations(
-        self,
-        job_description: str,
         candidates: List[Dict]
-    ) -> List[Dict]:
+    ) -> Dict[str, float]:
         """
-        Generate explanations with citations for each ranked candidate.
+        Calculate profile completeness for each candidate.
 
-        Args:
-            job_description: Job description
-            candidates: Ranked candidates
-
-        Returns:
-            Candidates with explanation fields
-
-        TODO: Implement for Days 9-12
-        Explanation components:
-        - Top matching chunks (citations)
-        - Skills match summary
-        - Experience match summary
-        - Overall reasoning
+        Weights:
+        - Resume: 25%
+        - Skills: 20%
+        - Experience: 20%
+        - Contact: 15%
+        - Summary: 20%
         """
-        logger.warning("_generate_explanations not yet implemented")
-        return candidates
+        scores = {}
 
-    async def get_ranking_explanation(
-        self,
-        job_id: int,
-        candidate_id: str
-    ) -> Dict:
-        """
-        Get detailed explanation for a specific candidate ranking.
+        for candidate in candidates:
+            score = 0.0
 
-        Args:
-            job_id: Job ID
-            candidate_id: Candidate ID
+            # Check each component
+            if candidate.get('resume_url'):
+                score += 0.25
+            if candidate.get('skills') and len(candidate['skills']) > 3:
+                score += 0.20
+            if candidate.get('years_experience'):
+                score += 0.20
+            if candidate.get('email') and candidate.get('phone'):
+                score += 0.15
+            if candidate.get('professional_summary'):
+                score += 0.20
 
-        Returns:
-            Explanation with citations
+            scores[candidate['id']] = score
 
-        TODO: Implement for Days 9-12
-        """
-        logger.warning(f"get_ranking_explanation not yet implemented for job {job_id}, candidate {candidate_id}")
-        return {}
+        return scores
 
+    def _generate_cache_key(self, job_id: str, filters: Optional[Dict]) -> str:
+        """Generate deterministic cache key."""
+        content = f"{job_id}:{json.dumps(filters or {}, sort_keys=True)}"
+        return f"ranking:{hashlib.md5(content.encode()).hexdigest()}"
 
-# Global ranker instance
-ranker = CandidateRanker()
+    async def _fetch_job_data(self, job_id: str) -> Dict:
+        """Fetch job data from database."""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Job).where(Job.id == job_id)
+            )
+            job = result.scalar_one_or_none()
+
+            if not job:
+                raise ValueError(f"Job {job_id} not found")
+
+            return {
+                'id': str(job.id),
+                'title': job.title,
+                'description': job.description,
+                'department': job.department,
+                'location': job.location,
+                'must_have_skills_json': job.must_have_skills_json or [],
+                'required_skills_json': job.required_skills_json or [],
+                'min_years_experience': float(job.min_years_experience or 0),
+                'max_years_experience': float(job.max_years_experience or 100),
+                'work_arrangement': job.work_arrangement
+            }
+
+    async def _fetch_candidates_data(self, candidate_ids: List[str]) -> List[Dict]:
+        """Fetch full candidate data from database."""
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Candidate)
+                .options(
+                    selectinload(Candidate.contact),
+                    selectinload(Candidate.skills)
+                )
+                .where(Candidate.id.in_(candidate_ids))
+            )
+            candidates = result.scalars().all()
+
+            # Convert to dicts
+            candidate_dicts = []
+            for candidate in candidates:
+                # Get skills
+                skills_result = await db.execute(
+                    select(Skill.name)
+                    .join(CandidateSkill)
+                    .where(CandidateSkill.candidate_id == candidate.id)
+                )
+                skills = [row[0] for row in skills_result.all()]
+
+                candidate_dicts.append({
+                    'id': str(candidate.id),
+                    'full_name': candidate.full_name,
+                    'years_experience': float(candidate.years_experience or 0),
+                    'professional_summary': candidate.professional_summary,
+                    'skills': skills,
+                    'email': candidate.contact.email if candidate.contact else None,
+                    'phone': candidate.contact.phone if candidate.contact else None,
+                    'city': candidate.contact.city if candidate.contact else None,
+                    'open_to_remote': False,  # TODO: Add this field to schema
+                    'updated_at': candidate.updated_at,
+                    'resume_url': None,  # TODO: Get from resumes relationship
+                    'matched_skills': skills  # For explanation
+                })
+
+            return candidate_dicts
+
+    def _serialize_ranking(self, results: List[RankedCandidate]) -> List[Dict]:
+        """Convert RankedCandidate objects to JSON-serializable dicts."""
+        return [
+            {
+                'candidate_id': r.candidate_id,
+                'final_score': r.final_score,
+                'band': r.band,
+                'confidence': r.confidence,
+                'summary': r.summary,
+                'reasons': r.reasons,
+                'evidence_snippets': r.evidence_snippets,
+                'score_breakdown': r.score_breakdown
+            }
+            for r in results
+        ]
+
+    def _deserialize_ranking(self, data: List[Dict]) -> List[RankedCandidate]:
+        """Convert JSON dicts back to RankedCandidate objects."""
+        return [
+            RankedCandidate(**item)
+            for item in data
+        ]
+
+# Singleton instance
+ranking_service = RankingService()

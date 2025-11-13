@@ -752,7 +752,8 @@ ingestion.py -> chunk_text(text, chunk_size=400)
 1. **`create_collection()`**: Creates a new collection for storing vectors
 2. **`upsert_vectors()`**: Saves vectors with their metadata
 3. **`delete_by_candidate_id()`**: Removes all vectors for a candidate
-4. **`search()`**: (Future) Searches for similar vectors
+4. **`search()`**: Searches for similar vectors using semantic similarity
+5. **`get_collection_info()`**: Gets collection statistics
 
 **Why it's needed:** You need somewhere to store all those embeddings! Qdrant is perfect for this.
 
@@ -767,8 +768,9 @@ Metadata: {candidate_id: "123", chunk_index: 0, skills: ["Python", "Django"]}
 - `services/ingestion.py` -> Uses `vector_store.upsert_vectors()`, `vector_store.delete_by_candidate_id()`
 - `main.py` -> Uses `vector_store` for health check
 - `api/admin.py` -> Uses `vector_store.get_collection_info()`
+- `services/retrieval.py` -> Uses `vector_store.search()` for semantic search
+- `services/job_embeddings.py` -> Uses `vector_store.upsert_points()` for storing job vectors
 - `services/chatbot.py` -> Uses `vector_store` for semantic search
-- `services/ranking.py` -> Uses `vector_store` for candidate search
 
 **📎 This File Uses:**
 - `config.py` -> `settings` for Qdrant connection
@@ -929,35 +931,327 @@ jobs.py -> apply_combined_sql_gates(must_have_skills, min_years, max_years, loca
 
 ---
 
-#### **`ranking.py`** - Candidate Ranking Algorithm 🏆
-**What it does:** (Likely) Ranks candidates by how well they match a job.
+#### **`job_embeddings.py`** - Job Embedding Service 💼
+**What it does:** Creates and manages embeddings for job descriptions and skills. This is **REQUIRED** for semantic matching!
 
-**Note:** This probably implements:
-- Semantic search (finding similar candidates)
-- Cross-encoder re-ranking (fine-tuning the ranking)
-- Scoring algorithm (combining multiple factors)
+**Key concepts:**
+- **Job Embeddings**: Converting job descriptions into vectors (just like candidate resumes)
+- **Dual Embeddings**: Creates two embeddings per job (profile + skills) for better matching
+- **Caching**: Job embeddings are cached since jobs change less frequently than candidates
+
+**Main functionalities:**
+1. **`get_or_create_job_embeddings()`**: Gets cached embeddings or creates new ones
+2. **`_prepare_skills_text()`**: Expands skills using ontology and prepares text for embedding
+3. **`_store_job_vectors()`**: Stores job vectors in Qdrant for analysis
+
+**Why two embeddings?**
+- **Profile embedding** (50% weight): Captures role, responsibilities, company culture
+- **Skills embedding** (30% weight): Captures technical requirements
+- Allows weighted semantic search per PRD requirements
+
+**Why it's needed:** To find similar candidates, you need to compare job vectors with candidate vectors. This service creates the job vectors!
+
+**Example:**
+```
+Job: "Python Developer with 5 years experience"
+→ Profile embedding: [0.1, -0.2, 0.3, ...] (from title + description)
+→ Skills embedding: [0.2, -0.1, 0.4, ...] (from expanded skills)
+→ Both stored and cached for reuse
+```
+
+**📎 Used By (Dependencies):**
+- `services/retrieval.py` -> Uses `job_embedding_service.get_or_create_job_embeddings()`
+
+**📎 This File Uses:**
+- `services/embeddings.py` -> `embedding_service` for generating vectors
+- `services/vector_store.py` -> `vector_store` for storing job vectors
+- `services/ontology.py` -> `expand_skills()` for skill expansion
+- `services/redis_client.py` -> `redis_client` for caching embeddings
+- `utils/logging.py` -> `logger` for logging
+
+**🔄 Complete Call Flow:**
+```
+retrieval.py -> job_embedding_service.get_or_create_job_embeddings(job_data)
+-> job_embeddings.py -> JobEmbeddingService.get_or_create_job_embeddings()
+-> Check Redis cache -> If cached, return cached embeddings
+-> If not cached:
+   -> embedding_service.embed_text(profile_text) -> services/embeddings.py -> Profile vector
+   -> expand_skills() -> services/ontology.py -> Expand skills
+   -> embedding_service.embed_text(skills_text) -> services/embeddings.py -> Skills vector
+   -> Cache in Redis -> Store in Qdrant -> Return both embeddings
+```
 
 ---
 
-#### **`ontology.py`** - Skills Extraction 🎯
-**What it does:** Extracts skills from text using a skills taxonomy.
+#### **`retrieval.py`** - Dense Retrieval Service 🔍
+**What it does:** Performs semantic search to find candidates similar to a job using vector similarity.
+
+**Key concepts:**
+- **Dense Retrieval**: Semantic search using vector similarity (not keyword matching!)
+- **Multi-Vector Search**: Searches across profile, skills, and chunk vectors
+- **Weighted Combination**: Combines scores from different vector types
+- **Evidence Chunks**: Returns actual text snippets that match (for explanations)
+
+**Main functionalities:**
+1. **`retrieve_candidates()`**: Main entry point - finds semantically similar candidates
+2. **`_search_profiles()`**: Searches candidate profile vectors
+3. **`_search_skills()`**: Searches candidate skills vectors
+4. **`_search_chunks()`**: Searches candidate resume chunk vectors (with evidence)
+5. **`_combine_scores()`**: Combines all scores with weights (50% profile + 30% skills + 20% chunks)
+
+**Why it's needed:** This is the "AI magic" that finds candidates who are similar in meaning, not just keywords!
+
+**Example:**
+```
+Job: "Software engineer with Python experience"
+→ Searches candidate vectors
+→ Finds: "Backend developer with 5 years Python" (high similarity!)
+→ Finds: "Full-stack dev with Django" (good similarity!)
+→ Returns candidates ranked by semantic similarity
+```
+
+**📎 Used By (Dependencies):**
+- `services/ranking.py` -> Uses `dense_retriever.retrieve_candidates()`
+
+**📎 This File Uses:**
+- `services/vector_store.py` -> `vector_store` for searching vectors
+- `services/job_embeddings.py` -> `job_embedding_service` for job embeddings
+- `utils/logging.py` -> `logger` for logging
+
+**🔄 Complete Call Flow:**
+```
+ranking.py -> dense_retriever.retrieve_candidates(job_data, candidate_ids)
+-> retrieval.py -> DenseRetriever.retrieve_candidates()
+-> job_embedding_service.get_or_create_job_embeddings() -> services/job_embeddings.py -> Get job vectors
+-> _search_profiles() -> vector_store.search() -> services/vector_store.py -> Profile matches
+-> _search_skills() -> vector_store.search() -> services/vector_store.py -> Skills matches
+-> _search_chunks() -> vector_store.search() -> services/vector_store.py -> Chunk matches (with evidence)
+-> _combine_scores() -> Combines all scores with weights
+-> Returns ranked candidates with evidence chunks
+```
+
+---
+
+#### **`scoring.py`** - Structured Scoring Service 📊
+**What it does:** Calculates objective scores based on database fields (experience, skills, recency, location, etc.)
+
+**Key concepts:**
+- **Structured Scoring**: Objective metrics from database (not AI-based)
+- **Multi-Component**: Scores based on 5 different factors
+- **Weighted Combination**: Combines components with specific weights
+- **Diminishing Returns**: Experience scoring uses square root to prevent over-indexing
+
+**Main functionalities:**
+1. **`calculate_score()`**: Main entry point - calculates all structured scores
+2. **`_score_nice_to_have_skills()`**: Scores based on skills coverage
+3. **`_score_experience()`**: Scores based on years of experience (with diminishing returns)
+4. **`_score_recency()`**: Scores based on profile freshness (exponential decay)
+5. **`_score_domain()`**: Scores based on industry/domain match
+6. **`_score_location()`**: Scores based on location match or remote eligibility
+
+**Scoring Weights (from PRD):**
+- Nice-to-have skills coverage: 35%
+- Years experience: 20%
+- Recency: 15%
+- Domain match: 10%
+- Location: 20%
+
+**Why it's needed:** Complements semantic similarity with objective facts. Ensures experienced candidates rank higher and rewards fresh profiles!
+
+**Example:**
+```
+Candidate: 5 years Python, updated 10 days ago, in San Francisco, has Django skill
+Job: Python developer, 3+ years, San Francisco, requires Django
+→ Skills score: 1.0 (has Django)
+→ Experience score: 0.87 (5 years with diminishing returns)
+→ Recency score: 0.72 (10 days ago)
+→ Location score: 1.0 (same city)
+→ Domain score: 0.8 (engineering match)
+→ Combined: 0.35*1.0 + 0.20*0.87 + 0.15*0.72 + 0.10*0.8 + 0.20*1.0 = 0.90
+```
+
+**📎 Used By (Dependencies):**
+- `services/ranking.py` -> Uses `structured_scorer.calculate_score()`
+
+**📎 This File Uses:**
+- `utils/logging.py` -> `logger` for logging
+
+**🔄 Complete Call Flow:**
+```
+ranking.py -> structured_scorer.calculate_score(candidate_data, job_data)
+-> scoring.py -> StructuredScorer.calculate_score()
+-> _score_nice_to_have_skills() -> Calculates skills coverage
+-> _score_experience() -> Calculates experience score (with diminishing returns)
+-> _score_recency() -> Calculates recency score (exponential decay)
+-> _score_domain() -> Calculates domain match
+-> _score_location() -> Calculates location match
+-> Combines all scores with weights -> Returns StructuredScore object
+```
+
+---
+
+#### **`explanation.py`** - Explanation Generator 📝
+**What it does:** Generates human-readable explanations for ranking decisions. Provides transparency and builds trust!
+
+**Key concepts:**
+- **Explainable AI**: Making AI decisions understandable to humans
+- **Evidence-Based**: Explanations cite actual evidence from resumes
+- **Structured Format**: Summary + reasons + evidence snippets
+- **Trust Building**: Helps staffing agents understand why candidates are ranked
+
+**Main functionalities:**
+1. **`generate()`**: Main entry point - creates comprehensive explanation
+2. **`_generate_summary()`**: Creates one-line summary based on ranking band
+3. **`_extract_reasons()`**: Extracts top reasons from scoring components
+4. **`_format_evidence()`**: Formats evidence chunks with citations
+
+**Why explanations matter:**
+- Build trust with staffing agents
+- Enable informed decisions
+- Meet compliance requirements
+- Debug ranking issues
+
+**Example Output:**
+```json
+{
+  "summary": "Excellent match for Python Developer with 85% compatibility",
+  "reasons": [
+    "Strong skills match: Python, Django, REST API",
+    "5 years of relevant experience",
+    "Located in San Francisco",
+    "Recently updated profile (active candidate)"
+  ],
+  "evidence": [
+    {
+      "text": "5 years of Python development experience...",
+      "skills_found": ["Python", "Django"],
+      "relevance_score": 0.92,
+      "location": "Resume chunk 3"
+    }
+  ]
+}
+```
+
+**📎 Used By (Dependencies):**
+- `services/ranking.py` -> Uses `explanation_generator.generate()`
+
+**📎 This File Uses:**
+- `utils/logging.py` -> `logger` for logging
+
+**🔄 Complete Call Flow:**
+```
+ranking.py -> explanation_generator.generate(ranking_result, job_data, retrieval_results, structured_scores)
+-> explanation.py -> ExplanationGenerator.generate()
+-> _generate_summary() -> Creates one-line summary
+-> _extract_reasons() -> Extracts top reasons from scores
+-> _format_evidence() -> Formats evidence chunks with citations
+-> Returns explanation dict -> ranking.py includes in final result
+```
+
+---
+
+#### **`ranking.py`** - Candidate Ranking Orchestrator 🏆
+**What it does:** This is the **main ranking service** that orchestrates the complete ranking pipeline from start to finish!
+
+**Key concepts:**
+- **Orchestration**: Coordinates multiple services to produce final rankings
+- **Pipeline**: A series of steps that candidates go through
+- **Score Blending**: Combines multiple scoring methods into one final score
+- **Banding**: Groups candidates into confidence levels (high/medium/low)
+
+**The Complete Ranking Pipeline:**
+1. **SQL Gating**: Filters candidates using hard requirements (must-have skills, years, location)
+2. **Dense Retrieval**: Semantic search using vector similarity (finds similar candidates)
+3. **Structured Scoring**: Calculates objective scores (experience, skills, recency, location)
+4. **Completeness Scoring**: Measures profile completeness
+5. **Score Blending**: Combines all scores with weights (40% dense + 35% structured + 25% completeness)
+6. **Banding**: Groups candidates into high/medium/low confidence bands
+7. **Explanation Generation**: Creates human-readable explanations for each candidate
+
+**Main functionalities:**
+1. **`rank_candidates()`**: Main entry point - runs the complete pipeline
+2. **`_blend_scores()`**: Combines dense, structured, and completeness scores
+3. **`_band_candidates()`**: Groups candidates by confidence level
+4. **`_calculate_completeness_scores()`**: Measures how complete each profile is
+
+**Why it's needed:** This service brings everything together! It takes a job, finds matching candidates, scores them, and returns ranked results with explanations.
+
+**📎 Used By (Dependencies):**
+- `api/jobs.py` -> Uses `ranking_service.rank_candidates()`
+
+**📎 This File Uses:**
+- `services/sql_filter.py` -> `apply_combined_sql_gates()` for filtering
+- `services/retrieval.py` -> `dense_retriever` for semantic search
+- `services/scoring.py` -> `structured_scorer` for objective scoring
+- `services/explanation.py` -> `explanation_generator` for explanations
+- `services/redis_client.py` -> `redis_client` for caching results
+- `database.py` -> `AsyncSessionLocal` for database queries
+- `models/candidate.py` -> `Job`, `Candidate`, `CandidateContact`, `CandidateSkill`, `Skill` models
+
+**🔄 Complete Call Flow:**
+```
+jobs.py -> ranking_service.rank_candidates(job_id)
+-> ranking.py -> RankingService.rank_candidates()
+-> Step 1: Fetch job data from database
+-> Step 2: apply_combined_sql_gates() -> services/sql_filter.py -> Filter candidates
+-> Step 3: dense_retriever.retrieve_candidates() -> services/retrieval.py -> Semantic search
+-> Step 4: structured_scorer.calculate_score() -> services/scoring.py -> Calculate scores
+-> Step 5: _calculate_completeness_scores() -> Measure profile completeness
+-> Step 6: _blend_scores() -> Combine all scores with weights
+-> Step 7: _band_candidates() -> Group into high/medium/low bands
+-> Step 8: explanation_generator.generate() -> services/explanation.py -> Create explanations
+-> Cache results in Redis -> Return ranked candidates with explanations
+```
+
+---
+
+#### **`ontology.py`** - Skills Extraction & Expansion 🎯
+**What it does:** Extracts skills from text and expands skill lists using a skills taxonomy.
 
 **Key concepts:**
 - **Ontology**: A structured list of concepts and their relationships
 - **NER (Named Entity Recognition)**: AI that finds entities in text (like skills)
 - **spaCy**: A Python library for natural language processing
+- **Skill Expansion**: Finding related skills (e.g., "Python" → "Python3", "Python Programming")
 
 **Main functionalities:**
 1. Extracts skills from resume text
 2. Matches extracted skills to ontology
-3. Returns standardized skill names
+3. Expands skill lists (finds related skills)
+4. Returns standardized skill names
 
-**Why it's needed:** Resumes mention skills in different ways ("Python programming" vs "Python dev"). This standardizes them!
+**Why it's needed:** 
+- Resumes mention skills in different ways ("Python programming" vs "Python dev")
+- Jobs might say "ML" but candidates have "Machine Learning"
+- Skill expansion bridges these gaps for better matching!
 
 **Example:**
 ```
 Resume text: "Experienced in Python, Django, and REST APIs"
 → Extracted skills: ["Python", "Django", "REST API"]
+
+Job requires: "Python"
+→ Expanded to: ["Python", "Python3", "Python Programming"]
+→ Matches candidate's "Python" skill!
+```
+
+**📎 Used By (Dependencies):**
+- `services/ingestion.py` -> Uses `extract_skills_from_text()` to find skills in resumes
+- `services/job_embeddings.py` -> Uses `expand_skills()` to expand job skill requirements
+- `api/admin.py` -> Uses `is_spacy_available()` to check if spaCy is installed
+
+**📎 This File Uses:**
+- `utils/logging.py` -> `logger` for logging
+
+**🔄 Complete Call Flow:**
+```
+ingestion.py -> extract_skills_from_text(resume_text)
+-> ontology.py -> Extracts skills using spaCy or pattern matching
+-> Returns list of standardized skills -> ingestion.py stores in vector metadata
+
+job_embeddings.py -> expand_skills(skill_list)
+-> ontology.py -> Expands each skill to related skills
+-> Returns expanded skill list -> job_embeddings.py uses for embedding
 ```
 
 ---
@@ -1148,8 +1442,25 @@ This folder contains utility scripts for maintenance tasks.
 **Example scripts:**
 - `clean_ingestion.py`: Cleans up ingestion data
 - `fix_retry_logic.py`: Fixes retry logic issues
+- `apply_retry_fix.py`: Applies retry logic fixes
 
 **Why it's needed:** Sometimes you need to run one-off tasks. Scripts make it easy!
+
+### 📂 `backend/` - Utility Scripts (Root Level) 🛠️
+
+These are utility scripts located in the `backend/` folder root for development and debugging:
+
+**Example scripts:**
+- `check_database.py`: Checks database connection and schema
+- `check_enum_schema.py`: Validates enum types in database
+- `clear_all_data.py`: Clears all data from databases (use with caution!)
+- `diagnose_all.py`: Comprehensive system diagnostics
+- `populate_dummy_data.py`: Populates database with test data
+- `test_api_quick.py`: Quick API testing script
+- `test_day4_quick.py`: Quick Day 4 feature testing
+- `test_day4_e2e_adaptive.py`: End-to-end adaptive testing
+
+**Why they're needed:** These scripts help with development, debugging, and testing. They're not part of the main application but are useful tools!
 
 ---
 
@@ -1201,20 +1512,52 @@ Now that you understand the pieces, let's see how they work together!
 1. User → POST /api/v1/jobs/rank → backend/app/api/jobs.py
    "Find me candidates for job 456"
 
-2. jobs.py → Fetch job from PostgreSQL
+2. jobs.py → ranking_service.rank_candidates() → services/ranking.py
+   "Starting complete ranking pipeline..."
+
+3. ranking.py → Fetch job data from PostgreSQL
    "Job 456 requires: Python, 5+ years, Remote"
 
-3. jobs.py → sql_filter.py → Filter candidates
+4. ranking.py → sql_filter.py → SQL Gating
    "Find all candidates with Python AND 5+ years AND Remote"
+   → Returns eligible candidate IDs
 
-4. jobs.py → (Future: ranking.py) → Semantic search + re-ranking
-   "Rank these candidates by how well they match"
+5. ranking.py → job_embeddings.py → Generate Job Embeddings
+   "Create embeddings for job description and skills"
+   → Profile embedding + Skills embedding (cached in Redis)
 
-5. jobs.py → Cache results in Redis
-   "Save this ranking so we don't have to recalculate"
+6. ranking.py → retrieval.py → Dense Retrieval
+   "Search for semantically similar candidates"
+   → Searches profile, skills, and chunk vectors
+   → Combines scores (50% profile + 30% skills + 20% chunks)
+   → Returns candidates with evidence chunks
 
-6. jobs.py → Return results
-   "Here are the top 20 candidates!"
+7. ranking.py → scoring.py → Structured Scoring
+   "Calculate objective scores for each candidate"
+   → Skills coverage (35%) + Experience (20%) + Recency (15%) + Domain (10%) + Location (20%)
+   → Returns structured scores
+
+8. ranking.py → Calculate Completeness Scores
+   "Measure profile completeness"
+   → Resume (25%) + Skills (20%) + Experience (20%) + Contact (15%) + Summary (20%)
+
+9. ranking.py → Blend All Scores
+   "Combine all scoring components"
+   → Final = 40% dense + 35% structured + 25% completeness
+
+10. ranking.py → Band Candidates
+    "Group into confidence levels"
+    → High (top 20%) / Medium (20-60%) / Low (bottom 40%)
+
+11. ranking.py → explanation.py → Generate Explanations
+    "Create human-readable explanations"
+    → Summary + Reasons + Evidence snippets
+
+12. ranking.py → Cache results in Redis
+    "Save this ranking so we don't have to recalculate"
+
+13. jobs.py → Return results
+    "Here are the top candidates with explanations!"
 ```
 
 ### **Scenario 3: System Monitoring** 📊
@@ -1499,9 +1842,13 @@ Your RightStaff project is a **sophisticated AI-powered candidate ranking system
 4. **Production-Ready**: Has retry logic, caching, monitoring, and tests
 5. **Well-Organized**: Clear separation of concerns
 
-**The Flow:**
+**The Complete Flow:**
 ```
-Resume Upload → Webhook → Queue → Parse → Embed → Store → Search → Rank → Return Results
+Resume Upload → Webhook → Queue → Parse → Extract Skills → Chunk → Embed → Store in Qdrant
+                                                                              ↓
+Job Posting → Generate Job Embeddings → SQL Gating → Dense Retrieval → Structured Scoring
+                                                                              ↓
+→ Score Blending → Banding → Explanation Generation → Return Ranked Results with Explanations
 ```
 
 **Key Technologies:**

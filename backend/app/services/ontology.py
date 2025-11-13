@@ -398,16 +398,16 @@ def _normalize_skill_with_taxonomy(skill: str, taxonomy: Dict) -> Optional[str]:
 def normalize_skill(skill: str, use_taxonomy: bool = True) -> str:
     """
     Normalize a single skill name.
-    
+
     Public API for skill normalization.
-    
+
     Args:
         skill: Skill name to normalize
         use_taxonomy: Whether to use taxonomy (default: True)
-    
+
     Returns:
         Normalized skill name (canonical form if found, otherwise original)
-    
+
     Example:
         normalize_skill("JS") → "JavaScript"
         normalize_skill("python3") → "Python"
@@ -415,9 +415,60 @@ def normalize_skill(skill: str, use_taxonomy: bool = True) -> str:
     """
     if not use_taxonomy:
         return skill.strip()
-    
+
     taxonomy = load_skills_taxonomy()
     normalized = _normalize_skill_with_taxonomy(skill, taxonomy)
-    
+
     return normalized if normalized else skill.strip()
+
+
+async def expand_skills(skills: List[str], use_taxonomy: bool = True) -> List[str]:
+    """
+    Expand skills list by adding synonyms and normalized forms.
+
+    Used for job embedding generation to improve matching:
+    - Job requires "Python" → expands to ["Python", "python", "python3", "py"]
+    - Increases recall when candidates use variants
+
+    Args:
+        skills: List of skill names to expand
+        use_taxonomy: Whether to use taxonomy for expansion (default: True)
+
+    Returns:
+        Expanded list of skills with variants (deduplicated)
+
+    Example:
+        skills = ["Python", "JavaScript"]
+        expanded = await expand_skills(skills)
+        # Returns: ["Python", "python", "python3", "py", "JavaScript", "JS", "js", "javascript"]
+    """
+    if not skills:
+        return []
+
+    if not use_taxonomy:
+        return skills
+
+    taxonomy = load_skills_taxonomy()
+    skills_dict = taxonomy.get("skills", {})
+
+    expanded_set = set()
+
+    for skill in skills:
+        # Add original skill
+        expanded_set.add(skill)
+
+        # Normalize to canonical form
+        canonical = _normalize_skill_with_taxonomy(skill, taxonomy)
+        if canonical:
+            expanded_set.add(canonical)
+
+            # Add all synonyms of the canonical form
+            skill_data = skills_dict.get(canonical, {})
+            synonyms = skill_data.get("synonyms", [])
+            expanded_set.update(synonyms)
+        else:
+            # No canonical form found, add lowercase variant
+            expanded_set.add(skill.lower())
+
+    return sorted(list(expanded_set))
 

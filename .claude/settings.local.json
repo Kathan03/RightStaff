@@ -40,7 +40,10 @@
       "Bash(C:UserskathaAnaconda3python.exe test_ranking_comprehensive.py)",
       "Bash(mv:*)",
       "Bash(rm:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(timeout 60 ../venv/Scripts/python:*)",
+      "Bash(timeout 90 ../venv/Scripts/python:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

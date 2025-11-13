@@ -1627,5 +1627,12 @@ With ranking complete, Day 5 will focus on:
 3. **RAG pipeline for Q&A**
 4. **Email draft generation**
 5. **Integration tests**
+6. **Edit explanation.py file to use LLM agent to generate summary and explanation**
+
+### Day 6 PREVIEW
+
+6. **Create chatbot Agent**
+7. **Configure chatbot Agent to collaborate with LLM explanation agent for better conversation context**
+
 
 The ranking pipeline is now production-ready and matches the PRD specifications exactly!

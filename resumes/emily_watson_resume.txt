@@ -1,0 +1,51 @@
+EMILY WATSON
+Engineering Manager
+Email: emily.w@example.com | Phone: +1-206-555-0303
+Location: Seattle, WA
+
+PROFESSIONAL SUMMARY
+Engineering Manager with 12 years of experience and deep technical background in distributed systems. Previously Staff Engineer at major tech companies including Amazon and Microsoft. Expertise in Java, Go, and system design. Proven track record of scaling teams from 5 to 50+ engineers and products from 1M to 100M+ users.
+
+TECHNICAL SKILLS
+- Languages: Java, Go, Python, C++
+- Systems: Kubernetes, Docker, Microservices, Distributed Systems
+- Databases: PostgreSQL, DynamoDB, Cassandra, Redis
+- Cloud: AWS, Azure, GCP
+- Leadership: Team Building, Agile, Strategic Planning, Mentorship
+
+PROFESSIONAL EXPERIENCE
+
+Engineering Manager | MegaCorp | Seattle, WA
+January 2021 - Present
+- Lead 15-person engineering team across 3 product areas
+- Grew team from 8 to 15 engineers through hiring and mentorship
+- Defined technical roadmap and architecture for microservices platform
+- Improved team velocity by 45% through process improvements and tooling
+- Managed $3M annual engineering budget
+- Reduced production incidents by 60% through improved monitoring and testing
+
+Staff Engineer | TechGiant (Amazon) | Seattle, WA
+March 2015 - December 2020
+- Architected distributed systems handling 1B+ requests/day with 99.99% uptime
+- Led team of 8 engineers building core platform services
+- Designed scalable microservices architecture used by 50+ internal teams
+- Mentored 12 junior and mid-level engineers, 5 promoted to senior roles
+- Presented technical designs to VP-level leadership
+
+Senior Software Engineer | Microsoft | Redmond, WA
+June 2012 - February 2015
+- Built cloud infrastructure services using C# and Azure
+- Improved service reliability from 99.5% to 99.95%
+- Led migration of monolithic application to microservices
+
+EDUCATION
+Master of Science in Computer Science | MIT | 2012
+- Focus: Distributed Systems and Databases
+- GPA: 3.9/4.0
+
+Bachelor of Science in Computer Science | UC Berkeley | 2010
+
+PUBLICATIONS & SPEAKING
+- Speaker at QCon 2022: "Scaling Engineering Teams in High-Growth Startups"
+- Published paper on distributed consensus algorithms (ACM 2018)
+- Tech blog with 10K+ followers on distributed systems architecture

@@ -1,0 +1,63 @@
+JAMES THOMPSON, PhD
+Principal Engineer & Architecture Consultant
+Email: j.thompson@example.com | Phone: +1-617-555-0606
+Location: Boston, MA
+
+PROFESSIONAL SUMMARY
+Principal Engineer and architecture consultant with 15 years of experience designing and building large-scale distributed systems. Deep expertise in microservices, event-driven architecture, and scalability. Architected systems handling 1B+ requests/day with 99.99% uptime. Technical advisor to Fortune 500 companies and startup CTOs.
+
+TECHNICAL SKILLS
+- System Design: Microservices, Event-Driven Architecture, Distributed Systems
+- Languages: Java, Python, Go, C++, Scala
+- Messaging: Kafka, RabbitMQ, AWS SQS/SNS
+- Databases: PostgreSQL, MySQL, MongoDB, Cassandra, Redis, DynamoDB
+- Cloud: AWS, Azure, GCP
+- Orchestration: Kubernetes, Docker, Service Mesh (Istio, Linkerd)
+
+PROFESSIONAL EXPERIENCE
+
+Principal Engineer | TechConsulting LLC | Boston, MA
+January 2018 - Present
+- Architecture consultant for Fortune 500 companies (clients include JPMorgan, Walmart, Netflix)
+- Designed microservices architecture for e-commerce platform handling 50M users
+- Led system design reviews and technical due diligence for M&A activities
+- Advised 10+ startup CTOs on technical strategy and architecture decisions
+- Reduced infrastructure costs by 40% through architecture optimization
+- Published whitepapers on distributed systems best practices
+
+Senior Staff Engineer | BigTech (Google) | Mountain View, CA
+June 2010 - December 2017
+- Architected distributed systems processing 10PB+ of data daily
+- Led team of 25 engineers across 4 time zones
+- Designed core infrastructure services used by 1000+ internal applications
+- Improved system reliability from 99.9% to 99.99% (10x reduction in downtime)
+- Mentored 30+ engineers, 15 promoted to senior/staff levels
+- Received company-wide Excellence Award 2015, 2017
+
+Software Architect | Enterprise Software Inc | Boston, MA
+March 2009 - May 2010
+- Designed enterprise software architecture for Fortune 1000 clients
+- Led migration from monolithic to microservices architecture
+
+EDUCATION
+PhD in Computer Science | Carnegie Mellon University | 2009
+- Dissertation: "Scalable Consensus Algorithms for Distributed Databases"
+- Published 8 peer-reviewed papers in top-tier conferences
+
+Master of Science in Computer Science | MIT | 2006
+Bachelor of Science in Computer Science | Caltech | 2004
+
+PUBLICATIONS & SPEAKING
+- Author of "Designing Distributed Systems" (O'Reilly, 2020) - 10,000+ copies sold
+- Regular speaker at QCon, GOTO, Strange Loop conferences
+- Published 25+ technical papers in ACM, IEEE conferences
+- Tech blog with 50K+ followers
+
+PATENTS
+- US Patent #10,234,567: "Method for distributed consensus in multi-datacenter environments"
+- US Patent #10,345,678: "System for adaptive load balancing in microservices"
+
+AWARDS & RECOGNITION
+- ACM Distinguished Engineer (2019)
+- InfoWorld Technology Leadership Award (2018)
+- Named one of "Top 10 Distributed Systems Experts" by InfoQ (2020)

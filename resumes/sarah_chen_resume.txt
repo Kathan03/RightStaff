@@ -1,0 +1,44 @@
+SARAH CHEN
+Senior Full-Stack Engineer
+Email: sarah.chen@example.com | Phone: +1-415-555-0101
+Location: San Francisco, CA
+
+PROFESSIONAL SUMMARY
+Senior Full-Stack Engineer with 8 years of experience building scalable web applications. Expert in Python, React, and cloud architecture. Led multiple high-impact projects at tech startups, resulting in 300% user growth. Passionate about building scalable systems and mentoring junior developers.
+
+TECHNICAL SKILLS
+- Languages: Python, JavaScript, TypeScript
+- Frontend: React, Redux, HTML5, CSS3
+- Backend: FastAPI, Django, Flask, Node.js
+- Databases: PostgreSQL, Redis, MongoDB
+- Cloud & DevOps: AWS (EC2, S3, Lambda), Docker, Kubernetes
+- Tools: Git, Jenkins, JIRA
+
+PROFESSIONAL EXPERIENCE
+
+Senior Software Engineer | TechCorp | San Francisco, CA
+January 2020 - Present
+- Lead backend team of 5 engineers, architecting microservices handling 10M+ requests/day
+- Designed and implemented RESTful APIs using FastAPI and Python
+- Reduced API response time by 40% through query optimization and caching strategies
+- Mentored 3 junior developers, conducting code reviews and pair programming sessions
+- Implemented CI/CD pipelines using Jenkins and Docker, reducing deployment time by 60%
+
+Software Engineer | StartupXYZ | San Francisco, CA
+June 2016 - December 2019
+- Full-stack development using React and Django
+- Built responsive web applications serving 100K+ daily active users
+- Collaborated with product team to define technical requirements and roadmap
+- Implemented unit and integration tests, achieving 85% code coverage
+
+EDUCATION
+Master of Science in Computer Science | Stanford University | 2016
+Bachelor of Science in Computer Science | UC Berkeley | 2014
+
+CERTIFICATIONS
+- AWS Certified Solutions Architect
+- Certified Kubernetes Administrator (CKA)
+
+ACHIEVEMENTS
+- Winner of TechCorp Hackathon 2022 - Best Architecture Design
+- Speaker at PyCon 2021 - "Building Scalable APIs with FastAPI"
