@@ -123,8 +123,8 @@ pytest tests/test_parsers.py -v
 - ✅ **Error handling** (corrupted data, unsupported formats)
 - ✅ **Integration workflow** (parse → chunk pipeline)
 
-**Not Yet Implemented**:
-- ⏳ PDF parsing (parser structure exists, needs PDF library)
+**Not Yet Implemented**: **(Already did need to add to the test file)**
+- ⏳ PDF parsing (parser structure exists, needs PDF library) 
 - ⏳ DOCX parsing (parser structure exists, needs DOCX library)
 
 **When to Run**: After infrastructure tests, before testing ingestion pipeline
@@ -141,14 +141,14 @@ pytest tests/test_parsers.py -v
 
 ---
 
-### Category 3: Skills Extraction & Ontology Tests
+### Category 3: Skills Extraction & Ontology Tests **Need to generate unit test using pytest for this**
 **Purpose**: Verify skill extraction and normalization
 
 **Test File**: [backend/tests/test_ontology.py](backend/tests/test_ontology.py)
 
 **Run Command**:
 ```bash
-python -m tests.test_ontology
+python -m feature_tests.test_ontology
 ```
 
 **What It Tests**:
@@ -170,14 +170,14 @@ python -m tests.test_ontology
 
 ---
 
-### Category 4: Embedding Generation Tests
+### Category 4: Embedding Generation Tests **Need to generate unit test using pytest for this**
 **Purpose**: Verify text-to-vector conversion
 
 **Test File**: [backend/tests/test_embeddings.py](backend/tests/test_embeddings.py)
 
 **Run Command**:
 ```bash
-python -m tests.test_embeddings
+python -m feature_tests.test_embeddings
 ```
 
 **What It Tests**:
@@ -196,14 +196,14 @@ python -m tests.test_embeddings
 
 ---
 
-### Category 5: Job Embedding Tests
+### Category 5: Job Embedding Tests **Need to generate unit test using pytest for this**
 **Purpose**: Verify job description vectorization
 
 **Test File**: [backend/tests/test_job_embeddings.py](backend/tests/test_job_embeddings.py)
 
 **Run Command**:
 ```bash
-python -m tests.test_job_embeddings
+python -m feature_tests.test_job_embeddings
 ```
 
 **What It Tests**:
@@ -224,14 +224,14 @@ python -m tests.test_job_embeddings
 
 ---
 
-### Category 6: Vector Store Tests
+### Category 6: Vector Store Tests **Need to generate unit test using pytest for this**
 **Purpose**: Verify Qdrant operations
 
 **Test File**: [backend/tests/test_vector_store.py](backend/tests/test_vector_store.py)
 
 **Run Command**:
 ```bash
-python -m tests.test_vector_store
+python -m feature_tests.test_vector_store
 ```
 
 **What It Tests**:
@@ -243,7 +243,7 @@ python -m tests.test_vector_store
 
 **When to Run**: Before testing dense retrieval or ingestion pipeline
 
-**Key Functions Tested**:
+**Key Functions Tested**: **Only tests health check and collection info**
 - `vector_store.create_collection()` - Create Qdrant collection
 - `vector_store.upsert_vectors()` - Store vectors
 - `vector_store.search()` - Semantic search
@@ -295,7 +295,7 @@ pytest tests/test_ranking_comprehensive.py -v
 
 ---
 
-### Category 8: API Endpoint Tests
+### Category 8: API Endpoint Tests 
 **Purpose**: Verify API functionality
 
 **Test File**: [backend/tests/test_api.py](backend/tests/test_api.py)
@@ -305,7 +305,7 @@ pytest tests/test_ranking_comprehensive.py -v
 pytest tests/test_api.py -v
 ```
 
-**What It Tests**:
+**What It Tests**: **Only tests health check and nothing less**
 - ✅ Health check endpoint (`GET /health`)
 - ✅ Webhook endpoint (`POST /api/v1/webhooks/candidate-updated`)
 - ✅ Job creation endpoint (`POST /api/v1/jobs`)

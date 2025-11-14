@@ -60,16 +60,16 @@ async def clear_minio():
     print("\n2️⃣ Clearing MinIO...")
 
     try:
-        from app.services.storage import storage_service
+        from app.services.s3_client import s3_client
 
         # List all objects in the bucket
-        bucket_name = storage_service.bucket_name
-        objects = storage_service.client.list_objects(bucket_name, recursive=True)
+        bucket_name = s3_client.bucket_name
+        objects = s3_client.client.list_objects(bucket_name, recursive=True)
 
         deleted_count = 0
         for obj in objects:
             try:
-                storage_service.client.remove_object(bucket_name, obj.object_name)
+                s3_client.client.remove_object(bucket_name, obj.object_name)
                 deleted_count += 1
             except Exception as e:
                 print(f"   ⚠️  Warning: Could not delete {obj.object_name}: {e}")
@@ -86,22 +86,24 @@ async def clear_minio():
 async def clear_qdrant():
     """Clear all vectors from Qdrant collection."""
 
-    print("\n3️⃣ Clearing Qdrant...")
+    print("\n Clearing Qdrant collection...")
 
     try:
-        # Check if collection exists
-        collections = vector_store.client.get_collections().collections
-        collection_exists = any(c.name == vector_store.collection_name for c in collections)
+        # Get collection info
+        info = vector_store.get_collection_info()
+        vector_count = info.get('vectors_count', 0)
+        print(f"   Current vectors: {vector_count}")
 
-        if collection_exists:
-            # Delete the collection
-            vector_store.client.delete_collection(vector_store.collection_name)
-            print(f"   ✅ Qdrant collection '{vector_store.collection_name}' deleted")
-        else:
-            print(f"   ℹ️  Qdrant collection '{vector_store.collection_name}' does not exist")
+        # Delete collection and recreate
+        vector_store.client.delete_collection(vector_store.collection_name)
+        print(f"   ✅ Deleted collection: {vector_store.collection_name}")
+
+        # Recreate collection
+        vector_store.create_collection(vector_size=384)
+        print(f"   ✅ Recreated empty collection")
 
     except Exception as e:
-        print(f"   ❌ Error clearing Qdrant: {e}")
+        print(f"   ⚠️  Error clearing collection: {e}")
 
 
 async def clear_redis():

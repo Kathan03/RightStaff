@@ -17,7 +17,7 @@ from app.services.parsers import parse_resume, chunk_text, extract_metadata
 def test_chunk_text_basic():
     """Test basic text chunking with default parameters."""
     text = "This is a test. " * 100  # 100 sentences
-    chunks = chunk_text(text, chunk_size=100, overlap=20)
+    chunks = chunk_text(text, chunk_size=100, chunk_overlap=20)
 
     assert len(chunks) > 0
     assert all(len(chunk) > 0 for chunk in chunks)
@@ -28,12 +28,12 @@ def test_chunk_text_basic():
 def test_chunk_text_overlap():
     """Test that chunks have proper overlap."""
     text = "Word1 Word2 Word3 Word4 Word5 Word6 Word7 Word8 Word9 Word10"
-    chunks = chunk_text(text, chunk_size=20, overlap=5)
+    chunks = chunk_text(text, chunk_size=20, chunk_overlap=5)
 
     # Check that consecutive chunks share some content
     if len(chunks) > 1:
         # Last 5 chars of first chunk should appear in second chunk
-        assert chunks[0][-5:] in chunks[1] or chunks[0][-10:] in chunks[1]
+        assert chunks[0]['text'][15:20] in chunks[1]['text'] or chunks[1]['text'][0:5] in chunks[0]['text']
 
     print(f"✅ Chunks have proper overlap: {len(chunks)} chunks created")
 
@@ -41,8 +41,8 @@ def test_chunk_text_overlap():
 @pytest.mark.unit
 def test_chunk_text_empty():
     """Test chunking with empty text."""
-    chunks = chunk_text("", chunk_size=100, overlap=20)
-    assert len(chunks) == 0 or (len(chunks) == 1 and chunks[0] == "")
+    chunks = chunk_text("", chunk_size=100, chunk_overlap=20)
+    assert len(chunks) == 0 or (len(chunks) == 1 and chunks[0]['text'] == "")
     print("✅ Empty text returns no chunks or empty chunk")
 
 
@@ -50,10 +50,10 @@ def test_chunk_text_empty():
 def test_chunk_text_short():
     """Test chunking with text shorter than chunk size."""
     text = "Short text"
-    chunks = chunk_text(text, chunk_size=100, overlap=20)
+    chunks = chunk_text(text, chunk_size=100, chunk_overlap=20)
 
     assert len(chunks) == 1
-    assert chunks[0] == text
+    assert chunks[0]['text'] == text
     print("✅ Short text returns single chunk")
 
 
@@ -64,7 +64,7 @@ def test_chunk_text_various_sizes():
 
     # Test different chunk sizes
     for chunk_size in [50, 100, 200]:
-        chunks = chunk_text(text, chunk_size=chunk_size, overlap=10)
+        chunks = chunk_text(text, chunk_size=chunk_size, chunk_overlap=10)
         assert len(chunks) > 0
         print(f"✅ Chunk size {chunk_size}: {len(chunks)} chunks created")
 
@@ -73,7 +73,7 @@ def test_chunk_text_various_sizes():
 def test_chunk_text_no_overlap():
     """Test chunking with zero overlap."""
     text = "Word1 Word2 Word3 Word4 Word5 Word6 Word7 Word8 Word9 Word10"
-    chunks = chunk_text(text, chunk_size=20, overlap=0)
+    chunks = chunk_text(text, chunk_size=20, chunk_overlap=0)
 
     assert len(chunks) > 0
     # With no overlap, chunks should not share content
@@ -246,7 +246,7 @@ async def test_parse_and_chunk_workflow():
     result = await parse_resume(text_bytes, "resume.txt")
 
     # Step 2: Chunk the extracted text
-    chunks = chunk_text(result["text"], chunk_size=200, overlap=50)
+    chunks = chunk_text(result["text"], chunk_size=200, chunk_overlap=50)
 
     assert len(chunks) > 0
     assert all(len(chunk) > 0 for chunk in chunks)
@@ -274,11 +274,11 @@ def test_chunk_realistic_resume():
     PostgreSQL, MongoDB, Redis, Docker, Kubernetes, AWS, GCP
     """ * 5  # Repeat to make it longer
 
-    chunks = chunk_text(realistic_resume, chunk_size=400, overlap=50)
+    chunks = chunk_text(realistic_resume, chunk_size=400, chunk_overlap=50)
 
     assert len(chunks) > 0
     # Check that important info appears in chunks
-    combined_chunks = " ".join(chunks)
+    combined_chunks = " ".join(chunk['text'] for chunk in chunks)
     assert "Python" in combined_chunks or "EXPERIENCE" in combined_chunks
     print(f"✅ Realistic resume chunked: {len(chunks)} chunks")
 

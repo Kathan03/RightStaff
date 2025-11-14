@@ -77,13 +77,16 @@ class DenseRetriever:
         profile_results = await self._search_profiles(profile_emb, candidate_ids, top_k)
         skills_results = await self._search_skills(skills_emb, candidate_ids, top_k)
         chunk_results = await self._search_chunks(profile_emb, candidate_ids, top_k)
-
+        print(f"Chunk results: {chunk_results}")
+        print(f"Profile results: {profile_results}")    
+        print(f"Skills results: {skills_results}")
         # Combine and rank
         combined_results = self._combine_scores(
             profile_results,
             skills_results,
             chunk_results
         )
+        print(f"Combined results: {combined_results}")
 
         # Sort by combined score
         combined_results.sort(key=lambda x: x.combined_score, reverse=True)

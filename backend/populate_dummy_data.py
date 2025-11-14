@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from app.database import AsyncSessionLocal
 from app.models.candidate import Candidate, CandidateContact, CandidateResume, Skill, CandidateSkill
 from app.services.embeddings import embedding_service
@@ -284,7 +285,7 @@ async def create_candidates(db, skill_objects):
 
 
 async def populate_qdrant(db):
-    """Generate and store embeddings in Qdrant."""
+    """Generate and store embeddings in Qdrant (profile + skills + dummy chunk per candidate)."""
 
     print("\n3️⃣ Populating Qdrant with embeddings...")
 
@@ -293,41 +294,76 @@ async def populate_qdrant(db):
     print("   ✅ Collection ready")
 
     # Get all candidates
-    result = await db.execute(
-        select(Candidate.id, Candidate.full_name, Candidate.professional_summary)
-    )
-    candidates = result.all()
+    result = await db.execute(select(Candidate))
+    candidates = result.scalars().all()
 
-    for i, (cand_id, name, summary) in enumerate(candidates, 1):
+    for i, candidate in enumerate(candidates, 1):
         try:
-            # Generate profile embedding
-            profile_text = f"{name}\n{summary or 'No summary available'}"
-            embedding = await embedding_service.embed_text(profile_text)
+            # Get candidate skills
+            result = await db.execute(
+                select(Skill.name)
+                .join(CandidateSkill, CandidateSkill.skill_id == Skill.id)
+                .where(CandidateSkill.candidate_id == candidate.id)
+            )
+            skill_names = [name for (name,) in result.all()]
+
+            # 1. Generate profile embedding
+            profile_text = f"{candidate.full_name}\n{candidate.professional_summary or 'No summary available'}"
+            profile_embedding = await embedding_service.embed_text(profile_text)
+
+            # 2. Generate skills embedding
+            skills_text = " ".join(skill_names) if skill_names else "No skills"
+            skills_embedding = await embedding_service.embed_text(skills_text)
+
+            # 3. Generate a dummy chunk embedding (using summary as chunk)
+            chunk_text = candidate.professional_summary or "No experience details available"
+            chunk_embedding = await embedding_service.embed_text(chunk_text)
+
+            # Build all vectors and payloads
+            vectors = [profile_embedding, skills_embedding, chunk_embedding]
+            payloads = [
+                {
+                    "candidate_id": str(candidate.id),
+                    "kind": "profile",
+                    "full_name": candidate.full_name,
+                    "text": profile_text[:500],
+                    "skills": skill_names,
+                    "created_at": datetime.utcnow().isoformat()
+                },
+                {
+                    "candidate_id": str(candidate.id),
+                    "kind": "skills",
+                    "skills": skill_names,
+                    "skills_count": len(skill_names),
+                    "created_at": datetime.utcnow().isoformat()
+                },
+                {
+                    "candidate_id": str(candidate.id),
+                    "kind": "chunk",
+                    "chunk_index": 0,
+                    "chunk_text": chunk_text[:500],
+                    "skills_detected": skill_names,
+                    "created_at": datetime.utcnow().isoformat()
+                }
+            ]
 
             # Store in Qdrant
-            vectors = [embedding]
-            payloads = [{
-                "candidate_id": str(cand_id),
-                "kind": "profile",
-                "full_name": name,
-                "text": profile_text[:200]
-            }]
-
             success = vector_store.upsert_vectors(vectors, payloads)
 
             if success:
-                print(f"   ✅ {i}/{len(candidates)}: {name}")
+                print(f"   ✅ {i}/{len(candidates)}: {candidate.full_name} (profile + skills + 1 chunk)")
             else:
-                print(f"   ⚠️  {i}/{len(candidates)}: {name} (upsert failed)")
+                print(f"   ⚠️  {i}/{len(candidates)}: {candidate.full_name} (upsert failed)")
 
         except Exception as e:
-            print(f"   ❌ {i}/{len(candidates)}: {name} - Error: {e}")
+            print(f"   ❌ {i}/{len(candidates)}: {candidate.full_name} - Error: {e}")
 
     # Verify
     info = vector_store.get_collection_info()
     print(f"\n   Qdrant collection info:")
     print(f"   • Vectors: {info.get('vectors_count', 0)}")
     print(f"   • Points: {info.get('points_count', 0)}")
+    print(f"   • Expected: {len(candidates) * 3} vectors (3 per candidate)")
 
 
 async def populate_minio(db):

@@ -43,7 +43,8 @@
       "Bash(tree:*)",
       "Bash(timeout 60 ../venv/Scripts/python:*)",
       "Bash(timeout 90 ../venv/Scripts/python:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(timeout 120 bash -c \"../venv/Scripts/python clear_all_data.py && ../venv/Scripts/python populate_dummy_data.py\")"
     ],
     "deny": [],
     "ask": []

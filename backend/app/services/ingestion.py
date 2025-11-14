@@ -277,54 +277,85 @@ class IngestionWorker:
                 metrics_collector.record_timing("ingestion_stage_5_chunk", stage_start)
                 
                 # ========================================
-                # STAGE 6: Generate embeddings
+                # STAGE 6: Generate embeddings (profile, skills, chunks)
                 # ========================================
                 stage_start = datetime.utcnow()
-                logger.info(f"[6/7] Generating embeddings for {len(chunks)} chunks")
-                
+                logger.info(f"[6/7] Generating embeddings (1 profile + 1 skills + {len(chunks)} chunks)")
+
+                # 6a. Generate profile embedding (full resume summary)
+                profile_text = f"{candidate.full_name}\n{text[:1000]}"  # Use first 1000 chars as profile
+                profile_embedding = await embedding_service.embed_text(profile_text)
+
+                # 6b. Generate skills embedding (extracted skills)
+                skills_text = " ".join(extracted_skills) if extracted_skills else "No skills detected"
+                skills_embedding = await embedding_service.embed_text(skills_text)
+
+                # 6c. Generate chunk embeddings (resume chunks)
                 chunk_texts = [chunk["text"] for chunk in chunks]
-                embeddings = await embedding_service.embed_batch(chunk_texts, batch_size=32)
-                
-                logger.info(f"✅ Generated {len(embeddings)} embeddings (dim={len(embeddings[0])})")
+                chunk_embeddings = await embedding_service.embed_batch(chunk_texts, batch_size=32)
+
+                logger.info(f"✅ Generated 1 profile + 1 skills + {len(chunk_embeddings)} chunk embeddings (dim={len(profile_embedding)})")
                 metrics_collector.record_timing("ingestion_stage_6_embed", stage_start)
-                
+
                 # ========================================
-                # STAGE 7: Store in Qdrant (with skills metadata)
+                # STAGE 7: Store in Qdrant (profile + skills + chunks)
                 # ========================================
                 stage_start = datetime.utcnow()
                 logger.info(f"[7/7] Storing vectors in Qdrant")
-                
-                # Build payloads with skills metadata
-                payloads = []
-                for chunk, embedding in zip(chunks, embeddings):
-                    payload = {
+
+                # Delete old vectors first (idempotent re-indexing)
+                logger.info(f"Deleting old vectors for candidate {candidate_id} (if any)")
+                vector_store.delete_by_candidate_id(str(candidate_id))
+
+                # 7a. Build profile payload
+                all_vectors = [profile_embedding]
+                all_payloads = [{
+                    "candidate_id": str(candidate_id),
+                    "kind": "profile",
+                    "full_name": candidate.full_name,
+                    "text": profile_text[:500],  # Store snippet for debugging
+                    "skills": extracted_skills,
+                    "filename": metadata["filename"],
+                    "created_at": datetime.utcnow().isoformat()
+                }]
+
+                # 7b. Build skills payload
+                all_vectors.append(skills_embedding)
+                all_payloads.append({
+                    "candidate_id": str(candidate_id),
+                    "kind": "skills",
+                    "skills": extracted_skills,
+                    "skills_count": len(extracted_skills),
+                    "filename": metadata["filename"],
+                    "created_at": datetime.utcnow().isoformat()
+                })
+
+                # 7c. Build chunk payloads
+                for chunk, embedding in zip(chunks, chunk_embeddings):
+                    all_vectors.append(embedding)
+                    all_payloads.append({
                         "candidate_id": str(candidate_id),
+                        "kind": "chunk",
                         "chunk_index": chunk["chunk_index"],
                         "chunk_text": chunk["text"],
                         "start_char": chunk["start_char"],
                         "end_char": chunk["end_char"],
                         "char_count": chunk["char_count"],
+                        "skills_detected": extracted_skills,  # Skills for this candidate
                         "filename": metadata["filename"],
-                        "created_at": datetime.utcnow().isoformat(),
-                        # NEW: Add skills to payload for filtering
-                        "skills": extracted_skills
-                    }
-                    payloads.append(payload)
-                
-                # Delete old vectors (idempotent re-indexing)
-                logger.info(f"Deleting old vectors for candidate {candidate_id} (if any)")
-                vector_store.delete_by_candidate_id(str(candidate_id))
-                
-                # Upsert new vectors
+                        "created_at": datetime.utcnow().isoformat()
+                    })
+
+                # Upsert all vectors (1 profile + 1 skills + N chunks)
                 success = vector_store.upsert_vectors(
-                    vectors=embeddings,
-                    payloads=payloads
+                    vectors=all_vectors,
+                    payloads=all_payloads
                 )
-                
+
                 if not success:
                     raise Exception("Vector upsert failed")
-                
-                logger.info(f"✅ Stored {len(embeddings)} vectors in Qdrant")
+
+                logger.info(f"✅ Stored {len(all_vectors)} vectors in Qdrant (1 profile + 1 skills + {len(chunk_embeddings)} chunks)")
                 metrics_collector.record_timing("ingestion_stage_7_store", stage_start)
                 
                 # ========================================
@@ -338,7 +369,7 @@ class IngestionWorker:
                     f"   Text: {metadata['char_count']} chars\n"
                     f"   Skills: {len(extracted_skills)}\n"
                     f"   Chunks: {len(chunks)}\n"
-                    f"   Vectors: {len(embeddings)} (dim={len(embeddings[0])})\n"
+                    f"   Vectors: {len(all_vectors)} (1 profile + 1 skills + {len(chunk_embeddings)} chunks, dim={len(profile_embedding)})\n"
                     f"   Retry count: {retry_count}"
                 )
                 

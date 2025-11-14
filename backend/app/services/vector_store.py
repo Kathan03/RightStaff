@@ -160,21 +160,27 @@ class VectorStore:
             ids = []
             for payload in payloads:
                 candidate_id = payload.get("candidate_id", str(uuid.uuid4()))
+                kind = payload.get("kind", "unknown")
                 chunk_index = payload.get("chunk_index", 0)
-                
+
                 # CRITICAL FIX: Qdrant requires integer IDs (not strings) for upsert operations
-                # Solution: Generate deterministic integer ID from candidate_id + chunk_index
-                # Why hash?
-                # - Converts string to deterministic integer
-                # - Same input always gives same ID (idempotent)
-                # - Allows re-indexing without ID conflicts
-                point_id_str = f"{candidate_id}_chunk_{chunk_index}"
+                # Solution: Generate deterministic integer ID from candidate_id + kind + chunk_index
+                # Why include kind?
+                # - Ensures profile, skills, and chunk vectors get unique IDs
+                # - Profile: {candidate_id}_profile_0
+                # - Skills: {candidate_id}_skills_0
+                # - Chunk: {candidate_id}_chunk_{index}
+                if kind == "chunk":
+                    point_id_str = f"{candidate_id}_{kind}_{chunk_index}"
+                else:
+                    point_id_str = f"{candidate_id}_{kind}"
+
                 # Use hash() and mask to get positive 64-bit integer
                 point_id = hash(point_id_str) & 0x7FFFFFFFFFFFFFFF  # Positive 64-bit int
-                
+
                 # Store the string ID in payload for debugging/querying
                 payload["point_id_str"] = point_id_str
-                
+
                 ids.append(point_id)
         
         logger.info(f"Upserting {len(vectors)} vectors to collection '{self.collection_name}'")
