@@ -71,6 +71,10 @@ class CandidateResume(Base):
 
     candidate = relationship("Candidate", back_populates="resumes")
 
+# ========================================
+# NEW: Skill Model
+# ========================================
+
 
 class Skill(Base):
     """Skills ontology with parent-child relationships."""
