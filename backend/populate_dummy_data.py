@@ -382,8 +382,10 @@ async def populate_minio(db):
         # David Kim, Ana Martinez, Robert Johnson have no resumes (for testing)
     }
 
-    # Get path to resumes directory (root/resumes/)
-    resumes_dir = Path(__file__).parent.parent.parent / "resumes"
+    # Get path to resumes directory (relative to project root)
+    # backend/populate_dummy_data.py -> backend/ -> RightStaff/ -> resumes/
+    project_root = Path(__file__).parent.parent
+    resumes_dir = project_root / "resumes"
 
     if not resumes_dir.exists():
         print(f"   ⚠️  Resumes directory not found: {resumes_dir}")

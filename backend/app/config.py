@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     qdrant_host: str = Field(default="localhost", env="QDRANT_HOST")
     qdrant_port: int = Field(default=6333, env="QDRANT_PORT")
     qdrant_collection: str = Field(default="candidates_v1", env="QDRANT_COLLECTION")
+    qdrant_jobs_collection: str = Field(default="jobs_v1", env="QDRANT_JOBS_COLLECTION")
 
     # Redis
     redis_host: str = Field(default="localhost", env="REDIS_HOST")

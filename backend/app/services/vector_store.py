@@ -48,8 +48,10 @@ class VectorStore:
             port=settings.qdrant_port,
             timeout=30
         )
-        self.collection_name = settings.qdrant_collection
+        self.collection_name = settings.qdrant_collection  # candidates_v1
+        self.jobs_collection_name = settings.qdrant_jobs_collection  # jobs_v1
         logger.info(f"Qdrant client initialized: {settings.qdrant_host}:{settings.qdrant_port}")
+        logger.info(f"Collections: candidates={self.collection_name}, jobs={self.jobs_collection_name}")
 
     def create_collection(self, vector_size: int = 384):
         """

@@ -37,7 +37,7 @@ Thumbs.db
 # Models
 *.pth
 *.bin
-models/
+
 
 # Test artifacts
 .pytest_cache/
