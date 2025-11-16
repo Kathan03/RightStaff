@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from app.database import AsyncSessionLocal
-from app.models.candidate import Candidate, CandidateContact, CandidateResume, Skill, CandidateSkill
+from app.models.candidate import Candidate, CandidateContact, CandidateResume, Skill, CandidateSkill, Job, Application, ApplicationStatus
 from app.services.embeddings import embedding_service
 from app.services.vector_store import vector_store
 from app.services.s3_client import s3_client
@@ -452,6 +452,52 @@ async def populate_minio(db):
     print(f"   • Skipped: {skipped_count} candidates (for testing)")
 
 
+async def create_applications(db):
+    """Create job applications for testing."""
+
+    print("\n" + "="*60)
+    print("CREATING JOB APPLICATIONS")
+    print("="*60)
+
+    # Get first 3 jobs and first 10 candidates for demo
+    jobs_result = await db.execute(select(Job).limit(3))
+    jobs = jobs_result.scalars().all()
+
+    candidates_result = await db.execute(select(Candidate).limit(10))
+    candidates = candidates_result.scalars().all()
+
+    if not jobs:
+        print("⚠️  No jobs found - skipping application creation")
+        return
+    elif not candidates:
+        print("⚠️  No candidates found - skipping application creation")
+        return
+
+    applications_created = 0
+
+    # Create applications: first 10 candidates apply to first 3 jobs
+    for job in jobs:
+        for candidate in candidates:
+            try:
+                # Create application
+                application = Application(
+                    candidate_id=candidate.id,
+                    job_id=job.id,
+                    status=ApplicationStatus.applied
+                )
+                db.add(application)
+                applications_created += 1
+            except Exception as e:
+                print(f"⚠️  Failed to create application: {e}")
+                continue
+
+    await db.commit()
+    print(f"✅ Created {applications_created} applications")
+    print(f"   Jobs: {len(jobs)}")
+    print(f"   Candidates: {len(candidates)}")
+    print(f"   Applications per job: ~{applications_created // len(jobs)}")
+
+
 async def populate_all():
     """Populate all systems with dummy data."""
 
@@ -471,6 +517,9 @@ async def populate_all():
 
         # Populate MinIO
         await populate_minio(db)
+
+        # Create applications
+        await create_applications(db)
 
     # Summary
     print("\n" + "="*70)

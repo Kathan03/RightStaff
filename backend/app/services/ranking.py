@@ -18,7 +18,7 @@ from app.services.explanation import explanation_generator
 from app.services.redis_client import redis_client
 from app.utils.logging import logger
 from app.database import AsyncSessionLocal
-from app.models.candidate import Job, Candidate, CandidateContact, CandidateSkill, Skill
+from app.models.candidate import Job, Candidate, CandidateContact, CandidateSkill, Skill, Application
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -92,14 +92,34 @@ class RankingService:
         # Step 1: Get job data
         job_data = await self._fetch_job_data(job_id)
 
-        # Step 2: SQL gating
+        # ════════════════════════════════════════════════════════════════
+        # Step 2a: Get candidates who applied to this job
+        # ════════════════════════════════════════════════════════════════
+        async with AsyncSessionLocal() as db:
+            application_result = await db.execute(
+                select(Application.candidate_id)
+                .where(Application.job_id == job_id)
+            )
+            applied_candidate_ids = [str(row[0]) for row in application_result.all()]
+
+        # Early exit if no applications
+        if not applied_candidate_ids:
+            logger.warning(f"⚠️  No applications found for job {job_id}")
+            return []
+
+        logger.info(f"📋 {len(applied_candidate_ids)} candidates applied to job {job_id}")
+
+        # ════════════════════════════════════════════════════════════════
+        # Step 2b: Apply SQL gates ONLY on candidates who applied
+        # ════════════════════════════════════════════════════════════════
         eligible_candidate_ids = await apply_combined_sql_gates(
+            application_ids=applied_candidate_ids,  # NEW: Filter by applications first!
             must_have_skills=job_data.get('must_have_skills_json', []),
             min_years_experience=job_data.get('min_years_experience'),
             max_years_experience=job_data.get('max_years_experience'),
             preferred_location=job_data.get('location')
         )
-        logger.info(f"📊 {len(eligible_candidate_ids)} candidates passed SQL gates")
+        logger.info(f"📊 {len(eligible_candidate_ids)} applicants passed SQL gates")
 
         if not eligible_candidate_ids:
             return []

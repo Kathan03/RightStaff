@@ -33,6 +33,7 @@ class Candidate(Base):
     contact = relationship("CandidateContact", back_populates="candidate", uselist=False)
     resumes = relationship("CandidateResume", back_populates="candidate")
     skills = relationship("CandidateSkill", back_populates="candidate")
+    applications = relationship("Application", back_populates="candidate")
 
 
 class CandidateContact(Base):
@@ -152,3 +153,93 @@ class Job(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    applications = relationship("Application", back_populates="job")
+
+
+# ========================================
+# Application Model - Job Applications
+# ========================================
+
+class ApplicationStatus(str, enum.Enum):
+    """
+    Application status enumeration.
+    Matches database enum: application_status_enum
+    """
+    sourced = "sourced"
+    applied = "applied"
+    screen = "screen"
+    shortlist = "shortlist"
+    interview = "interview"
+    offer = "offer"
+    hired = "hired"
+    rejected = "rejected"
+    withdrawn = "withdrawn"
+
+
+class Application(Base):
+    """
+    Job applications - tracks which candidates applied to which jobs.
+
+    BUSINESS RULES:
+    - One candidate can apply to a job only ONCE (UNIQUE constraint)
+    - Application status tracks hiring pipeline stage
+    - Foreign keys CASCADE on delete (delete candidate → delete applications)
+
+    USAGE:
+        # Create application
+        app = Application(
+            candidate_id=candidate.id,
+            job_id=job.id,
+            status=ApplicationStatus.applied
+        )
+
+        # Get all applicants for a job
+        job.applications  # List[Application]
+
+        # Get all jobs a candidate applied to
+        candidate.applications  # List[Application]
+    """
+
+    __tablename__ = "application"
+    __table_args__ = {"schema": "rightstaff"}
+
+    # Primary key
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    # Foreign keys
+    candidate_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("rightstaff.candidate.id", ondelete="CASCADE"),
+        nullable=False
+    )
+    job_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("rightstaff.job.id", ondelete="CASCADE"),
+        nullable=False
+    )
+
+    # Status tracking
+    status = Column(
+        SQLEnum(
+            ApplicationStatus,
+            schema="rightstaff",
+            name="application_status_enum"
+        ),
+        nullable=False,
+        default=ApplicationStatus.applied
+    )
+
+    # Timestamps
+    applied_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False
+    )
+
+    # Relationships (bidirectional)
+    candidate = relationship("Candidate", back_populates="applications")
+    job = relationship("Job", back_populates="applications")

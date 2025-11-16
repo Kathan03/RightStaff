@@ -29,31 +29,38 @@ logger = logging.getLogger(__name__)
 
 async def filter_candidates_by_must_have_skills(
     must_have_skills: List[str],
+    application_ids: Optional[List[str]] = None,
     db: Optional[AsyncSession] = None
 ) -> Set[str]:
     """
     Filter candidates who have ALL must-have skills (AND logic).
-    
+
     This is the ONTOLOGY GATE - critical for ranking quality.
-    
+
+    PERFORMANCE OPTIMIZATION:
+    If application_ids provided, filter by them FIRST to reduce search space.
+    Example: 100 applicants vs 10,000 candidates = 100x faster query.
+
     SQL Query Strategy:
     - JOIN candidate_skill → skill tables
     - Filter where skill.name IN must_have_skills
+    - Filter by application_ids (if provided)
     - GROUP BY candidate_id
     - HAVING COUNT(DISTINCT skill_id) = len(must_have_skills)
-    
+
     Why GROUP BY + HAVING?
     - Ensures candidate has ALL skills (not just some)
     - Efficient with proper indexes
     - Single query (no N+1 problem)
-    
+
     Args:
         must_have_skills: List of required skill names (e.g., ["Python", "AWS"])
+        application_ids: Optional list of candidate UUIDs to filter by (NEW!)
         db: Optional database session (creates new if not provided)
-    
+
     Returns:
         Set of candidate UUIDs (as strings) who pass the gate
-    
+
     Example:
         skills = ["Python", "AWS"]
         qualified = await filter_candidates_by_must_have_skills(skills)
@@ -70,13 +77,25 @@ async def filter_candidates_by_must_have_skills(
     
     try:
         logger.info(f"Applying must-have skills gate: {must_have_skills}")
-        
+
+        # Build query
         query = (
             select(CandidateSkill.candidate_id)
             .join(Skill, CandidateSkill.skill_id == Skill.id)
             .where(Skill.name.in_(must_have_skills))
-            .group_by(CandidateSkill.candidate_id)
-            .having(func.count(func.distinct(CandidateSkill.skill_id)) == len(must_have_skills))
+        )
+
+        # PERFORMANCE OPTIMIZATION: Filter by application_ids FIRST
+        if application_ids:
+            from uuid import UUID
+            # Convert string UUIDs to UUID objects for SQL query
+            uuid_list = [UUID(app_id) for app_id in application_ids]
+            query = query.where(CandidateSkill.candidate_id.in_(uuid_list))
+            logger.info(f"  → Filtering by {len(application_ids)} application IDs")
+
+        # Apply skill matching logic
+        query = query.group_by(CandidateSkill.candidate_id).having(
+            func.count(func.distinct(CandidateSkill.skill_id)) == len(must_have_skills)
         )
         
         result = await db.execute(query)
@@ -196,6 +215,7 @@ async def filter_candidates_by_location(
 
 
 async def apply_combined_sql_gates(
+    application_ids: Optional[List[str]] = None,
     must_have_skills: Optional[List[str]] = None,
     min_years_experience: Optional[float] = None,
     max_years_experience: Optional[float] = None,
@@ -204,43 +224,61 @@ async def apply_combined_sql_gates(
 ) -> Set[str]:
     """
     Apply multiple SQL gates and return intersection (AND logic).
-    
+
+    PERFORMANCE OPTIMIZATION:
+    If application_ids provided, filter by them FIRST to reduce search space.
+    Example: 100 applicants vs 10,000 candidates = 100x faster query.
+
     Combines: must-have skills, years of experience, location
     Returns only candidates who pass ALL gates.
-    
+
     Why intersection?
     - All filters must pass (stricter matching)
     - Reduces false positives
     - Better candidate quality
-    
+
     Args:
+        application_ids: Optional list of candidate UUIDs to filter by (NEW: FIRST parameter)
         must_have_skills: Required skills (e.g., ["Python", "AWS"])
         min_years_experience: Minimum years
         max_years_experience: Maximum years
         preferred_location: City name
         db: Optional database session
-    
+
     Returns:
         Set of candidate UUIDs who pass ALL gates
-    
+
     Example:
         qualified = await apply_combined_sql_gates(
+            application_ids=["uuid-1", "uuid-2", ...],
             must_have_skills=["Python", "AWS"],
             min_years_experience=3.0,
             preferred_location="San Francisco"
         )
     """
+    # CRITICAL: If application_ids provided but empty, return empty set
+    if application_ids is not None and not application_ids:
+        logger.info("⚠️  Empty application_ids list - returning empty set")
+        return set()
+
+    if application_ids:
+        logger.info(f"🔍 Starting SQL gates for {len(application_ids)} applicants")
+
     close_db = False
     if db is None:
         db = AsyncSessionLocal()
         close_db = True
-    
+
     try:
         qualified_sets = []
-        
+
         # Gate 1: Must-have skills
         if must_have_skills:
-            skills_set = await filter_candidates_by_must_have_skills(must_have_skills, db)
+            skills_set = await filter_candidates_by_must_have_skills(
+                must_have_skills,
+                application_ids=application_ids,
+                db=db
+            )
             if skills_set:
                 qualified_sets.append(skills_set)
             else:

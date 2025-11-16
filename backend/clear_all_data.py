@@ -29,6 +29,7 @@ async def clear_postgresql():
                 'rightstaff.candidate_education',
                 'rightstaff.candidate_experience',
                 'rightstaff.candidate_resume',
+                'rightstaff.application',  # Delete applications before candidates/jobs
                 'rightstaff.candidate',
                 'rightstaff.job',
                 'rightstaff.skill'
