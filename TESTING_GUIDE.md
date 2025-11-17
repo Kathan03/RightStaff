@@ -51,18 +51,30 @@ This guide provides comprehensive testing coverage for the RightStaff AI candida
 
 ## Quick Start
 
+**Note for Windows PowerShell Users:** All `curl` commands in this guide work on Windows PowerShell. For commands with JSON payloads, you can either:
+1. Save JSON to a file and use `curl.exe -d "@file.json"` (recommended)
+2. Use PowerShell's `Invoke-RestMethod` instead of curl
+
 ### 1. Verify Infrastructure
 
 ```bash
-# Start all services
+# Start all services (Unix/Mac)
 cd /home/user/RightStaff
 docker-compose -f docker/docker-compose.yml up -d
 
+# Windows PowerShell
+cd C:\Users\YourName\Documents\RightStaff
+docker-compose -f docker/docker-compose.yml up -d
+
 # Wait for services (30 seconds)
-sleep 30
+sleep 30  # Unix/Mac
+Start-Sleep -Seconds 30  # PowerShell
 
 # Check health
-curl http://localhost:8000/health | jq
+curl http://localhost:8000/health
+
+# Or with PowerShell's native command:
+Invoke-RestMethod -Uri "http://localhost:8000/health"
 
 # Expected response:
 # {
@@ -280,12 +292,10 @@ john.doe@example.com
 
 SKILLS:
 Python, FastAPI, Docker, PostgreSQL
-" > /tmp/test_resume.txt
+" > ../resumes/test_resume.txt
 
 # Upload resume
-curl -X POST "http://localhost:8000/api/v1/candidates/upload-resume" \
-  -F "file=@/tmp/test_resume.txt" \
-  | jq
+curl.exe -X POST "http://localhost:8000/api/v1/candidates/upload-resume" -F "file=@../resumes/test_resume.txt" | jq
 
 # Expected response:
 # {
@@ -319,8 +329,9 @@ curl -X POST "http://localhost:8000/api/v1/candidates/upload-resume" \
 
 ```bash
 TEMP_ID="<temp_id_from_upload>"
+$TEMP_ID="239e28a2-4593-44c1-a50d-df89688c656a"
 
-curl "http://localhost:8000/api/v1/candidates/parsed/${TEMP_ID}" | jq
+curl.exe "http://localhost:8000/api/v1/candidates/parsed/${TEMP_ID}" | jq
 
 # Expected response:
 # {
@@ -347,22 +358,28 @@ curl "http://localhost:8000/api/v1/candidates/parsed/${TEMP_ID}" | jq
 **Response**: candidate_id + ingestion status
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/candidates/" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"temp_id\": \"${TEMP_ID}\",
-    \"full_name\": \"John Doe\",
-    \"email\": \"john.doe@example.com\",
-    \"phone\": \"(123) 456-7890\",
-    \"years_experience\": 5.0,
-    \"professional_summary\": \"Senior Python Developer\",
-    \"location\": \"Austin, TX\"
-  }" \
-  | jq
+TEMP_ID="<temp_id_from_upload>"
+$TEMP_ID="74c36745-4978-43f5-9d98-b2a85154d726"
+
+$body = @{
+    temp_id = $TEMP_ID
+    full_name = "John Doe"
+    email = "john.doe@example.com"
+    phone = "(123) 456-7890"
+    years_experience = 5.0
+    professional_summary = "Senior Python Developer"
+    location = "Austin, TX"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:8000/api/v1/candidates/" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $body
 
 # Expected response:
 # {
-#   "candidate_id": "550e8400-e29b-41d4-a716-446655440000",
+#   "candidate
+_id": "550e8400-e29b-41d4-a716-446655440000",
 #   "status": "ingestion_queued",
 #   "message": "Candidate created successfully. Full ingestion in progress."
 # }
@@ -386,18 +403,20 @@ curl -X POST "http://localhost:8000/api/v1/candidates/" \
 **Response**: job_id
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/jobs" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Senior Python Engineer",
-    "description": "Build scalable AI systems with FastAPI, PostgreSQL, and Qdrant",
-    "required_skills": ["Python", "FastAPI", "PostgreSQL", "Docker"],
-    "must_have_skills": ["Python", "FastAPI"],
-    "min_years_experience": 3,
-    "max_years_experience": 10,
-    "location": "Austin, TX"
-  }' \
-  | jq
+$body = @{
+    title = "Senior Python Engineer"
+    description = "Build scalable AI systems with FastAPI, PostgreSQL, and Qdrant"
+    required_skills = @("Python", "FastAPI", "PostgreSQL", "Docker")
+    must_have_skills = @("Python", "FastAPI")
+    min_years_experience = 3
+    max_years_experience = 10
+    location = "Austin, TX"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:8000/api/v1/jobs" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $body
 
 # Expected response:
 # {
@@ -416,12 +435,12 @@ curl -X POST "http://localhost:8000/api/v1/jobs" \
 **Response**: application_id + status
 
 ```bash
-JOB_ID="<job_id_from_create>"
-CANDIDATE_ID="<candidate_id_from_create>"
+$JOB_ID="<job_id_from_create>"
+$JOB_ID="6bdddf07-6e2b-4c8d-9114-527d7fbf9dca"
+$CANDIDATE_ID="<candidate_id_from_create>"
+$CANDIDATE_ID="239e28a2-4593-44c1-a50d-df89688c656a"
 
-curl -X POST "http://localhost:8000/api/v1/jobs/${JOB_ID}/apply?candidate_id=${CANDIDATE_ID}" \
-  -H "Content-Type: application/json" \
-  | jq
+curl.exe -X POST "http://localhost:8000/api/v1/jobs/$JOB_ID/apply?candidate_id=$CANDIDATE_ID" -H "Content-Type: application/json" | jq
 
 # Expected response (201 Created):
 # {
@@ -434,9 +453,7 @@ curl -X POST "http://localhost:8000/api/v1/jobs/${JOB_ID}/apply?candidate_id=${C
 # }
 
 # Test duplicate application (should return 409 Conflict)
-curl -X POST "http://localhost:8000/api/v1/jobs/${JOB_ID}/apply?candidate_id=${CANDIDATE_ID}" \
-  -H "Content-Type: application/json" \
-  | jq
+curl.exe -X POST "http://localhost:8000/api/v1/jobs/$JOB_ID/apply?candidate_id=$CANDIDATE_ID" -H "Content-Type: application/json" | jq
 
 # Expected response (409 Conflict):
 # {
@@ -459,13 +476,15 @@ curl -X POST "http://localhost:8000/api/v1/jobs/${JOB_ID}/apply?candidate_id=${C
 **Response**: Ranked candidates
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/jobs/rank" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"job_id\": \"${JOB_ID}\",
-    \"use_cache\": false
-  }" \
-  | jq
+$body = @{
+    job_id = $JOB_ID
+    use_cache = $false
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:8000/api/v1/jobs/rank" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $body
 ```
 
 ---
@@ -477,10 +496,14 @@ curl -X POST "http://localhost:8000/api/v1/jobs/rank" \
 **Response**: Ranked candidates with scores and explanations
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/jobs/${JOB_ID}/rank_full" \
-  -H "Content-Type: application/json" \
-  -d '{"use_cache": false}' \
-  | jq
+$body = @{
+    use_cache = $false
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:8000/api/v1/jobs/$JOB_ID/rank_full" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $body
 
 # Expected response:
 # {
@@ -530,6 +553,7 @@ curl -X POST "http://localhost:8000/api/v1/jobs/${JOB_ID}/rank_full" \
 **Response**: 202 Accepted with job_id
 
 ```bash
+# Unix/Mac/Linux
 curl -X POST "http://localhost:8000/api/v1/webhooks/candidate-updated" \
   -H "Content-Type: application/json" \
   -d "{
@@ -540,6 +564,24 @@ curl -X POST "http://localhost:8000/api/v1/webhooks/candidate-updated" \
     \"profile_snapshot\": {}
   }" \
   | jq
+
+# Windows PowerShell
+$CANDIDATE_ID = "your-candidate-id-here"
+$timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+@"
+{
+  "event_type": "resume_uploaded",
+  "candidate_id": "$CANDIDATE_ID",
+  "timestamp": "$timestamp",
+  "s3_resume_url": "resumes/$CANDIDATE_ID/resume.pdf",
+  "profile_snapshot": {}
+}
+"@ | Out-File -FilePath candidate_payload.json -Encoding UTF8 -NoNewline
+
+curl.exe -X POST "http://localhost:8000/api/v1/webhooks/candidate-updated" `
+  -H "Content-Type: application/json" `
+  -d "@candidate_payload.json"
 
 # Expected response (202 Accepted):
 # {
@@ -565,6 +607,7 @@ curl -X POST "http://localhost:8000/api/v1/webhooks/candidate-updated" \
 **Response**: Embeddings created confirmation
 
 ```bash
+# Unix/Mac/Linux
 curl -X POST "http://localhost:8000/api/v1/webhooks/job-ingestion" \
   -H "Content-Type: application/json" \
   -d "{
@@ -576,6 +619,38 @@ curl -X POST "http://localhost:8000/api/v1/webhooks/job-ingestion" \
     \"preferred_skills\": [\"Docker\", \"Qdrant\"]
   }" \
   | jq
+
+# Windows PowerShell - Method 1: Using JSON file
+@"
+{
+  "job_id": "$JOB_ID",
+  "title": "Senior Python Engineer",
+  "description": "Build scalable AI systems...",
+  "required_skills": ["Python", "FastAPI", "PostgreSQL"],
+  "must_have_skills": ["Python"],
+  "preferred_skills": ["Docker", "Qdrant"]
+}
+"@ | Out-File -FilePath job_payload.json -Encoding UTF8 -NoNewline
+
+curl.exe -X POST "http://localhost:8000/api/v1/webhooks/job-ingestion" `
+  -H "Content-Type: application/json" `
+  -d "@job_payload.json"
+
+# Windows PowerShell - Method 2: Using Invoke-RestMethod
+$JOB_ID = "your-job-id-here"
+$body = @{
+    job_id = $JOB_ID
+    title = "Senior Python Engineer"
+    description = "Build scalable AI systems..."
+    required_skills = @("Python", "FastAPI", "PostgreSQL")
+    must_have_skills = @("Python")
+    preferred_skills = @("Docker", "Qdrant")
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:8000/api/v1/webhooks/job-ingestion" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $body
 
 # Expected response:
 # {
@@ -783,69 +858,261 @@ curl "http://localhost:6333/collections" | jq
 
 ## End-to-End Workflows
 
-### Workflow 1: Complete Candidate Journey
+### Workflow 1: Complete Candidate Journey (PowerShell)
 
-**Scenario**: New candidate applies to job and gets ranked
+**Scenario**: Create a candidate that will be ranked and selected for a job
 
-```bash
-# 1. Create job
-JOB_ID=$(curl -X POST "http://localhost:8000/api/v1/jobs" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Senior Python Engineer",
-    "description": "Build AI systems",
-    "required_skills": ["Python", "FastAPI"],
-    "must_have_skills": ["Python"],
-    "min_years_experience": 3
-  }' | jq -r '.job_id')
+**IMPORTANT**: This workflow ensures the candidate is compatible with the job by:
+- Matching required skills (Python, FastAPI)
+- Meeting experience requirements (5 years, within 3-10 range)
+- Being in the same location (San Francisco)
 
-# 2. Pre-compute job embeddings
-curl -X POST "http://localhost:8000/api/v1/webhooks/job-ingestion" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"job_id\": \"${JOB_ID}\",
-    \"title\": \"Senior Python Engineer\",
-    \"description\": \"Build AI systems\",
-    \"required_skills\": [\"Python\", \"FastAPI\"]
-  }"
+```powershell
+# ============================================================
+# STEP 1: Create a resume file with matching skills
+# ============================================================
 
-# 3. Candidate uploads resume
-TEMP_ID=$(curl -X POST "http://localhost:8000/api/v1/candidates/upload-resume" \
-  -F "file=@/tmp/candidate_resume.txt" | jq -r '.temp_id')
+$resumeContent = @"
+JANE SMITH
+Senior Python Developer
 
-# 4. Candidate reviews parsed data
-curl "http://localhost:8000/api/v1/candidates/parsed/${TEMP_ID}" | jq
+Email: jane.smith@example.com
+Phone: (555) 123-4567
+Location: San Francisco, CA
 
-# 5. Candidate submits form
-CANDIDATE_ID=$(curl -X POST "http://localhost:8000/api/v1/candidates/" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"temp_id\": \"${TEMP_ID}\",
-    \"full_name\": \"Jane Smith\",
-    \"email\": \"jane@example.com\",
-    \"years_experience\": 5
-  }" | jq -r '.candidate_id')
+PROFESSIONAL SUMMARY
+Highly skilled Python engineer with 5 years of experience building scalable
+web applications using FastAPI, PostgreSQL, and modern cloud technologies.
+Proven track record of delivering high-quality software in fast-paced environments.
 
-# 6. Wait for full ingestion
-sleep 15
+TECHNICAL SKILLS
+- Languages: Python (Expert), JavaScript, SQL
+- Frameworks: FastAPI, Django, Flask, React
+- Databases: PostgreSQL, Redis, MongoDB
+- DevOps: Docker, Kubernetes, AWS, CI/CD
+- Tools: Git, Pytest, SQLAlchemy
 
-# 7. Candidate applies to job
-curl -X POST "http://localhost:8000/api/v1/jobs/${JOB_ID}/apply?candidate_id=${CANDIDATE_ID}"
+WORK EXPERIENCE
+Senior Python Developer | TechCorp Inc | 2020-Present
+- Built RESTful APIs using FastAPI serving 100K+ requests/day
+- Designed microservices architecture with Docker and Kubernetes
+- Optimized database queries reducing latency by 50%
+- Mentored junior developers and conducted code reviews
 
-# 8. Recruiter ranks candidates
-curl -X POST "http://localhost:8000/api/v1/jobs/${JOB_ID}/rank_full" \
-  -d '{"use_cache": false}' | jq
+Python Developer | StartupXYZ | 2019-2020
+- Developed web applications using Django and PostgreSQL
+- Implemented automated testing with 90% code coverage
+- Collaborated with frontend team using React
 
-# Expected: Jane Smith appears in ranked results!
+EDUCATION
+B.S. Computer Science | University of California | 2019
+"@
+
+# Save resume to file
+$resumePath = ".\jane_smith_resume.txt"
+$resumeContent | Out-File -FilePath $resumePath -Encoding UTF8 -NoNewline
+Write-Host "✅ Created resume file: $resumePath`n"
+
+# ============================================================
+# STEP 2: Create job with compatible requirements
+# ============================================================
+
+Write-Host "STEP 2: Creating job..."
+$jobBody = @{
+    title = "Senior Python Engineer"
+    description = "Build scalable AI systems with FastAPI, PostgreSQL, and Qdrant. Work on cutting-edge ranking algorithms."
+    department = "Engineering"
+    location = "San Francisco, CA (Hybrid)"
+    required_skills = @("Python", "FastAPI", "PostgreSQL", "Docker")
+    must_have_skills = @("Python", "FastAPI")  # Jane has both!
+    min_years_experience = 3
+    max_years_experience = 10  # Jane has 5 years ✅
+    work_arrangement = "hybrid"
+    employment_type = "full-time"
+} | ConvertTo-Json
+
+$jobResponse = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/jobs" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $jobBody
+
+$JOB_ID = $jobResponse.job_id
+Write-Host "✅ Job created: $JOB_ID"
+Write-Host "   Title: $($jobResponse.title)`n"
+
+# ============================================================
+# STEP 3: Upload resume (anonymous)
+# ============================================================
+
+Write-Host "STEP 3: Uploading resume..."
+$uploadResponse = curl.exe -X POST "http://localhost:8000/api/v1/candidates/upload-resume" `
+    -F "file=@$resumePath" `
+    -s | ConvertFrom-Json
+
+$TEMP_ID = $uploadResponse.temp_id
+Write-Host "✅ Resume uploaded and parsed"
+Write-Host "   temp_id: $TEMP_ID"
+Write-Host "   Parsed name: $($uploadResponse.parsed_data.full_name)"
+Write-Host "   Parsed email: $($uploadResponse.parsed_data.email)"
+Write-Host "   Parsed skills: $($uploadResponse.parsed_data.skills -join ', ')`n"
+
+# ============================================================
+# STEP 4: Review parsed data (optional verification)
+# ============================================================
+
+Write-Host "STEP 4: Verifying parsed data..."
+$parsedData = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/candidates/parsed/$TEMP_ID"
+Write-Host "✅ Parsed data retrieved (status: $($parsedData.status))`n"
+
+# ============================================================
+# STEP 5: Create candidate with form submission
+# ============================================================
+
+Write-Host "STEP 5: Creating candidate..."
+$candidateBody = @{
+    temp_id = $TEMP_ID
+    full_name = "Jane Smith"
+    email = "jane.smith@example.com"
+    phone = "(555) 123-4567"
+    years_experience = 5.0
+    professional_summary = "Highly skilled Python engineer with 5 years of experience building scalable web applications using FastAPI, PostgreSQL, and modern cloud technologies."
+    location = "San Francisco, CA"
+} | ConvertTo-Json
+
+$candidateResponse = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/candidates/" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $candidateBody
+
+$CANDIDATE_ID = $candidateResponse.candidate_id
+Write-Host "✅ Candidate created: $CANDIDATE_ID"
+Write-Host "   Processing job: $($candidateResponse.processing_job_id)`n"
+
+# ============================================================
+# STEP 6: Wait for embeddings to be generated
+# ============================================================
+
+Write-Host "STEP 6: Waiting for full ingestion (embeddings)..."
+Start-Sleep -Seconds 15
+Write-Host "✅ Ingestion complete`n"
+
+# ============================================================
+# STEP 7: Candidate applies to job
+# ============================================================
+
+Write-Host "STEP 7: Submitting job application..."
+$applicationResponse = curl.exe -X POST "http://localhost:8000/api/v1/jobs/$JOB_ID/apply?candidate_id=$CANDIDATE_ID" `
+    -H "Content-Type: application/json" `
+    -s | ConvertFrom-Json
+
+Write-Host "✅ Application submitted"
+Write-Host "   Application ID: $($applicationResponse.application_id)"
+Write-Host "   Status: $($applicationResponse.status)`n"
+
+# ============================================================
+# STEP 8: Rank candidates
+# ============================================================
+
+Write-Host "STEP 8: Ranking candidates for the job..."
+$rankingBody = @{
+    use_cache = $false
+} | ConvertTo-Json
+
+$rankingResponse = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/jobs/$JOB_ID/rank_full" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body $rankingBody
+
+Write-Host "✅ Ranking complete!`n"
+Write-Host "==================== RANKING RESULTS ====================" -ForegroundColor Cyan
+Write-Host "Total candidates: $($rankingResponse.metadata.total_candidates)"
+Write-Host "High confidence: $($rankingResponse.metadata.high_confidence)"
+Write-Host "Medium confidence: $($rankingResponse.metadata.medium_confidence)"
+Write-Host "Low confidence: $($rankingResponse.metadata.low_confidence)`n"
+
+if ($rankingResponse.ranked_candidates.Count -gt 0) {
+    $topCandidate = $rankingResponse.ranked_candidates[0]
+    Write-Host "🏆 TOP CANDIDATE:" -ForegroundColor Green
+    Write-Host "   Candidate ID: $($topCandidate.candidate_id)"
+    Write-Host "   Final Score: $([math]::Round($topCandidate.final_score * 100, 1))%"
+    Write-Host "   Band: $($topCandidate.band)"
+    Write-Host "   Confidence: $([math]::Round($topCandidate.confidence * 100, 1))%"
+    Write-Host "   Summary: $($topCandidate.summary)`n"
+
+    Write-Host "   Reasons:" -ForegroundColor Yellow
+    foreach ($reason in $topCandidate.reasons) {
+        Write-Host "   - $reason"
+    }
+
+    Write-Host "`n   Score Breakdown:" -ForegroundColor Yellow
+    Write-Host "   - Dense (semantic): $([math]::Round($topCandidate.score_breakdown.dense * 100, 1))%"
+    Write-Host "   - Structured: $([math]::Round($topCandidate.score_breakdown.structured * 100, 1))%"
+    Write-Host "   - Completeness: $([math]::Round($topCandidate.score_breakdown.completeness * 100, 1))%"
+
+    # Verify it's Jane Smith
+    if ($topCandidate.candidate_id -eq $CANDIDATE_ID) {
+        Write-Host "`n✅ SUCCESS! Jane Smith was ranked and selected!" -ForegroundColor Green
+    } else {
+        Write-Host "`n⚠️  Warning: A different candidate was ranked #1" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "❌ No candidates were ranked" -ForegroundColor Red
+    Write-Host "   This means no candidates passed the SQL gates or no applications exist"
+}
+
+Write-Host "`n========================================================`n"
+
+# Cleanup
+Remove-Item -Path $resumePath -ErrorAction SilentlyContinue
 ```
 
-**Validation**:
-- ✅ Resume parsed correctly (Stage 1)
-- ✅ Form pre-filled (Stage 2)
-- ✅ Candidate created in PostgreSQL (Stage 3)
-- ✅ Embeddings in Qdrant candidates_v1
+**Why This Candidate Gets Selected**:
+
+1. **Skills Match** ✅
+   - Has `Python` (must-have) ✅
+   - Has `FastAPI` (must-have) ✅
+   - Has `PostgreSQL` (required) ✅
+   - Has `Docker` (required) ✅
+
+2. **Experience Match** ✅
+   - Has 5 years experience
+   - Job requires 3-10 years ✅
+
+3. **Location Match** ✅
+   - Candidate: San Francisco, CA
+   - Job: San Francisco, CA (Hybrid) ✅
+
+4. **Application Submitted** ✅
+   - Candidate applied to the job
+   - Only applicants are ranked
+
+**Expected Output**:
+```
+✅ Job created: <job_id>
+✅ Resume uploaded and parsed
+✅ Candidate created: <candidate_id>
+✅ Application submitted
+✅ Ranking complete!
+
+🏆 TOP CANDIDATE:
+   Final Score: 75-85%
+   Band: high
+   Confidence: 80%+
+   Summary: Excellent match for Senior Python Engineer
+
+✅ SUCCESS! Jane Smith was ranked and selected!
+```
+
+**Validation Checklist**:
+- ✅ Resume parsed correctly (name, email, skills extracted)
+- ✅ Candidate created in PostgreSQL
+- ✅ Embeddings generated in Qdrant candidates_v1
 - ✅ Application created successfully
-- ✅ Ranking returns candidate with score and explanation
+- ✅ SQL gates passed (skills, experience, location)
+- ✅ Ranking returns candidate with high score
+- ✅ Semantic similarity match (FastAPI, Python, PostgreSQL)
+- ✅ Structured scoring (5 years experience)
+- ✅ Explanation and evidence provided
 
 ---
 

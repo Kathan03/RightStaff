@@ -238,16 +238,15 @@ async def apply_to_job(
         )
 
 
-@router.post("/rank")
+@router.post("/rank") #It just filters by SQL gates no ranking is done.
 async def rank_candidates(
     request: RankingRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Trigger candidate ranking for a job.
+    Trigger candidate filtering for a job.
     
-    Day 3: SQL gating only (must-have skills, years, location)
-    Days 5-8: Will add vector search + semantic ranking
+    SQL gating only (must-have skills, years, location)
     
     Args:
         request: Ranking request (job_id, use_cache)
@@ -266,10 +265,32 @@ async def rank_candidates(
         if not job:
             raise HTTPException(status_code=404, detail=f"Job {request.job_id} not found")
         
-        logger.info(f"🎯 Ranking candidates for job: {job.title}")
-        
-        # Apply SQL gating
+        logger.info(f"🎯 SQL filtering only candidates who applied to job: {job.title}")
+
+        # Get candidates who applied to this job
+        from app.models.candidate import Application
+        application_result = await db.execute(
+            select(Application.candidate_id)
+            .where(Application.job_id == request.job_id)
+        )
+        applied_candidate_ids = [str(row[0]) for row in application_result.all()]
+
+        logger.info(f"📋 {len(applied_candidate_ids)} candidates applied to job")
+
+        if not applied_candidate_ids:
+            logger.warning(f"⚠️  No applications found for job {request.job_id}")
+            return jsonable_encoder({
+                "status": "completed",
+                "job_id": str(job.id),
+                "job_title": job.title,
+                "total_qualified": 0,
+                "pipeline_stage": "sql_gating_only",
+                "note": "No candidates have applied to this job yet"
+            })
+
+        # Apply SQL gating ONLY on candidates who applied
         qualified_candidate_ids = await apply_combined_sql_gates(
+            application_ids=applied_candidate_ids,  # Filter by applications first!
             must_have_skills=job.must_have_skills_json or [],
             min_years_experience=float(job.min_years_experience) if job.min_years_experience else None,
             max_years_experience=float(job.max_years_experience) if job.max_years_experience else None,
@@ -361,10 +382,6 @@ async def get_job_rankings(
     }
 
 
-# ========================================
-# NEW DAY 4: Complete Ranking Pipeline
-# ========================================
-
 from app.services.ranking import ranking_service
 from pydantic import UUID4
 
@@ -393,14 +410,14 @@ class FullRankingRequest(BaseModel):
     use_cache: bool = True
 
 
-@router.post("/{job_id}/rank_full", response_model=RankingResponse)
+@router.post("/{job_id}/rank_full", response_model=RankingResponse) #Actually ranks the candidtaes
 async def rank_candidates_full(
     job_id: str,
     request: FullRankingRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Generate complete ranked candidate list for a job (Day 4).
+    Generate complete ranked candidate list for a job.
 
     This is the main ranking endpoint that:
     1. Applies SQL gates (hard filters)

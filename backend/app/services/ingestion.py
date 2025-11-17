@@ -1,12 +1,15 @@
 """
 Background worker that processes ingestion jobs from Redis queue.
-Flow: Poll Redis → Fetch candidate → Download resume → Parse → Chunk → Embed → Store in Qdrant
+Flow: Poll Redis → Fetch candidate → Download resume → Parse → Extract skills → Store skills in PostgreSQL → Chunk → Embed → Store in Qdrant
 
 DAY 3 ADDITIONS:
 - Retry logic with exponential backoff
 - Dead Letter Queue for failed jobs after max retries
 - Skills extraction from resume text
 - Structured metrics collection
+
+DAY 5+ ADDITIONS:
+- Store extracted skills in PostgreSQL for SQL gating
 """
 import asyncio
 import json
@@ -173,13 +176,14 @@ class IngestionWorker:
 
         MODES:
         - parse_only: Extract text and fields only (Stage 1 - Resume Upload)
-        - full: Complete 7-stage pipeline with embeddings (Stage 3 - Candidate Creation)
+        - full: Complete 8-stage pipeline with embeddings (Stage 3 - Candidate Creation)
 
         Pipeline stages (full mode):
         1. Fetch candidate details from PostgreSQL
         2. Download resume from MinIO
         3. Parse resume (extract text)
         4. Extract skills from text
+        4.5. Store skills in PostgreSQL (for SQL gating)
         5. Chunk text (split into semantic units)
         6. Generate embeddings (convert to vectors)
         7. Store in Qdrant (save vectors + metadata with skills)
@@ -328,7 +332,58 @@ class IngestionWorker:
                 
                 logger.info(f"✅ Extracted {len(extracted_skills)} skills: {', '.join(extracted_skills[:5])}{'...' if len(extracted_skills) > 5 else ''}")
                 metrics_collector.record_timing("ingestion_stage_4_skills", stage_start)
-                
+
+                # ========================================
+                # STAGE 4.5: Store skills in PostgreSQL
+                # ========================================
+                stage_start = datetime.utcnow()
+                logger.info(f"[4.5/7] Storing skills in PostgreSQL")
+
+                from app.models.candidate import Skill, CandidateSkill
+
+                # Delete existing skills for this candidate (idempotent re-indexing)
+                await db.execute(
+                    select(CandidateSkill).where(CandidateSkill.candidate_id == candidate_id)
+                )
+                await db.execute(
+                    "DELETE FROM rightstaff.candidate_skill WHERE candidate_id = :cid",
+                    {"cid": str(candidate_id)}
+                )
+
+                # For each extracted skill, find or create in skill table
+                skills_created = 0
+                skills_linked = 0
+
+                for skill_name in extracted_skills:
+                    # Find existing skill
+                    result = await db.execute(
+                        select(Skill).where(Skill.name == skill_name)
+                    )
+                    skill = result.scalar_one_or_none()
+
+                    # Create skill if it doesn't exist
+                    if not skill:
+                        skill = Skill(name=skill_name)
+                        db.add(skill)
+                        await db.flush()  # Get skill.id
+                        skills_created += 1
+                        logger.debug(f"Created new skill: {skill_name}")
+
+                    # Link candidate to skill
+                    candidate_skill = CandidateSkill(
+                        candidate_id=candidate_id,
+                        skill_id=skill.id,
+                        level=None,  # Not extracted yet
+                        years=None   # Not extracted yet
+                    )
+                    db.add(candidate_skill)
+                    skills_linked += 1
+
+                await db.commit()
+
+                logger.info(f"✅ Stored {skills_linked} skills in PostgreSQL ({skills_created} new skills created)")
+                metrics_collector.record_timing("ingestion_stage_4.5_store_skills", stage_start)
+
                 # ========================================
                 # STAGE 5: Chunk text
                 # ========================================

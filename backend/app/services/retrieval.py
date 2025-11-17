@@ -93,14 +93,20 @@ class DenseRetriever:
             logger.info(f"🔍 Fetching job embeddings from Qdrant for {job_id}")
 
             try:
+                from qdrant_client.models import Filter, FieldCondition, MatchValue
+
                 results = vector_store.client.scroll(
                     collection_name="jobs_v1",
-                    scroll_filter={
-                        "must": [
-                            {"key": "job_id", "match": {"value": str(job_id)}}
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="job_id",
+                                match=MatchValue(value=str(job_id))
+                            )
                         ]
-                    },
-                    limit=10
+                    ),
+                    limit=10,
+                    with_vectors=True  # CRITICAL: Must fetch vectors!
                 )
 
                 # Extract vectors from points
@@ -133,11 +139,40 @@ class DenseRetriever:
                 logger.info(f"✅ Fetched job embeddings from Qdrant for {job_id}")
 
             except Exception as e:
-                logger.error(f"❌ Failed to fetch job embeddings: {e}")
-                raise ValueError(
-                    f"Job embeddings retrieval failed for {job_id}. "
-                    f"Ensure job ingestion webhook was called."
-                )
+                logger.warning(f"⚠️  Job embeddings not found for {job_id}: {e}")
+                logger.warning(f"⚠️  Falling back to generating embeddings on-the-fly")
+
+                # FALLBACK: Generate embeddings on-the-fly
+                from app.services.job_embeddings import generate_job_embeddings
+
+                try:
+                    embeddings = await generate_job_embeddings(
+                        job_id=str(job_id),
+                        title=job_data.get("title", ""),
+                        description=job_data.get("description", ""),
+                        required_skills=job_data.get("required_skills_json", [])
+                    )
+
+                    profile_emb = embeddings["profile_vector"]
+                    skills_emb = embeddings["skills_vector"]
+
+                    # Cache for future requests
+                    await redis_client.set(
+                        f"job_embeddings:{job_id}",
+                        json.dumps({
+                            "profile_vector": profile_emb,
+                            "skills_vector": skills_emb
+                        }),
+                        ex=3600
+                    )
+
+                    logger.info(f"✅ Generated job embeddings on-the-fly for {job_id}")
+
+                except Exception as gen_error:
+                    logger.error(f"❌ Failed to generate embeddings on-the-fly: {gen_error}")
+                    raise ValueError(
+                        f"Job embeddings not available and could not be generated for {job_id}"
+                    )
 
         # Search each vector type
         profile_results = await self._search_profiles(profile_emb, candidate_ids, top_k)

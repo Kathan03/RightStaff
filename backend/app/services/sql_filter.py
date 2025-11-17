@@ -167,47 +167,91 @@ async def filter_candidates_by_years_experience(
             await db.close()
 
 
+def parse_city_from_location(location: str) -> str:
+    """
+    Extract city name from job location string.
+
+    Handles formats like:
+    - "San Francisco, CA (Hybrid)" -> "San Francisco"
+    - "Remote (US Only)" -> None (no specific city)
+    - "Austin, TX" -> "Austin"
+    - "Seattle" -> "Seattle"
+
+    Args:
+        location: Full location string from job
+
+    Returns:
+        City name or None if no city specified
+    """
+    if not location:
+        return None
+
+    # Check for remote-only locations (no specific city)
+    if location.lower().startswith("remote"):
+        return None
+
+    # Remove work arrangement in parentheses: "(Hybrid)", "(Onsite)", "(Remote)"
+    if "(" in location:
+        location = location.split("(")[0].strip()
+
+    # Extract city name (before first comma)
+    if "," in location:
+        city = location.split(",")[0].strip()
+    else:
+        city = location.strip()
+
+    return city if city else None
+
+
 async def filter_candidates_by_location(
     preferred_location: Optional[str] = None,
     db: Optional[AsyncSession] = None
 ) -> Set[str]:
     """
     Filter candidates by location (city).
-    
-    Case-insensitive matching.
-    
+
+    Case-insensitive matching. Parses city name from full job location string.
+
     Args:
-        preferred_location: City name (e.g., "New York")
+        preferred_location: Full location string (e.g., "San Francisco, CA (Hybrid)")
         db: Optional database session
-    
+
     Returns:
         Set of candidate UUIDs in that location
-    
+
     Example:
-        qualified = await filter_candidates_by_location("San Francisco")
+        qualified = await filter_candidates_by_location("San Francisco, CA (Hybrid)")
+        # Will match candidates with city="San Francisco"
     """
     if not preferred_location:
         logger.info("No location filter specified - skipping")
         return set()
-    
+
+    # Parse city name from full location string
+    city_name = parse_city_from_location(preferred_location)
+
+    if not city_name:
+        logger.info(f"No specific city in location '{preferred_location}' - skipping location filter")
+        return set()
+
     close_db = False
     if db is None:
         db = AsyncSessionLocal()
         close_db = True
-    
+
     try:
         query = (
             select(CandidateContact.candidate_id)
-            .where(func.lower(CandidateContact.city) == preferred_location.lower())
+            .where(func.lower(CandidateContact.city) == city_name.lower())
         )
-        
+
         result = await db.execute(query)
         candidate_ids = {str(row[0]) for row in result.all()}
-        
-        logger.info(f"✅ {len(candidate_ids)} candidates in location: {preferred_location}")
-        
+
+        logger.info(f"✅ {len(candidate_ids)} candidates in city: {city_name} (from location: {preferred_location})")
+
         return candidate_ids
-        
+
     finally:
         if close_db:
             await db.close()
