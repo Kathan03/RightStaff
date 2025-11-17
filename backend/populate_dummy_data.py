@@ -452,6 +452,71 @@ async def populate_minio(db):
     print(f"   • Skipped: {skipped_count} candidates (for testing)")
 
 
+async def create_job_embeddings(db):
+    """Generate and store embeddings for all jobs."""
+
+    print("\n" + "="*60)
+    print("CREATING JOB EMBEDDINGS")
+    print("="*60)
+
+    from app.services.job_embeddings import generate_job_embeddings
+
+    # Get all jobs
+    jobs_result = await db.execute(select(Job))
+    jobs = jobs_result.scalars().all()
+
+    if not jobs:
+        print("⚠️  No jobs found - skipping job embeddings")
+        return
+
+    embeddings_created = 0
+
+    for job in jobs:
+        try:
+            # Generate embeddings
+            embeddings = await generate_job_embeddings(
+                job_id=str(job.id),
+                title=job.title,
+                description=job.description or "",
+                required_skills=job.required_skills_json or []
+            )
+
+            # Store in Qdrant jobs_v1 collection
+            points = [
+                {
+                    "id": f"{job.id}_profile",
+                    "vector": embeddings["profile_vector"],
+                    "payload": {
+                        "job_id": str(job.id),
+                        "type": "profile",
+                        "title": job.title,
+                        "created_at": datetime.utcnow().isoformat()
+                    }
+                },
+                {
+                    "id": f"{job.id}_skills",
+                    "vector": embeddings["skills_vector"],
+                    "payload": {
+                        "job_id": str(job.id),
+                        "type": "skills",
+                        "skills": job.required_skills_json or [],
+                        "created_at": datetime.utcnow().isoformat()
+                    }
+                }
+            ]
+
+            await vector_store.upsert_points(points, collection_name="jobs_v1")
+            embeddings_created += 1
+
+            print(f"  ✅ {job.title}: embeddings created")
+
+        except Exception as e:
+            print(f"  ⚠️  {job.title}: failed - {e}")
+            continue
+
+    print(f"✅ Created embeddings for {embeddings_created}/{len(jobs)} jobs")
+
+
 async def create_applications(db):
     """Create job applications for testing."""
 
@@ -517,6 +582,9 @@ async def populate_all():
 
         # Populate MinIO
         await populate_minio(db)
+
+        # Create job embeddings
+        await create_job_embeddings(db)
 
         # Create applications
         await create_applications(db)

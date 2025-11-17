@@ -1,127 +1,389 @@
 """
-Candidate endpoints for testing and debugging.
-Direct upload and query capabilities.
+Candidate API Endpoints
 
-TODO: Implement for Days 1-4 (Foundation)
+WORKFLOW:
+1. POST /upload-resume → Anonymous upload, parse-only, cache in Redis
+2. GET /parsed/{temp_id} → Fetch cached data for form pre-fill
+3. POST / → Create candidate, trigger full ingestion, clear cache
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, status
-from pydantic import BaseModel
-from typing import List, Optional
-import logging
+from fastapi import APIRouter, File, UploadFile, HTTPException, Depends
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional, List
+from uuid import UUID
+import uuid
+import json
+import asyncio
 
-from app.services.ingestion import ingest_resume, delete_candidate_vectors
-
-logger = logging.getLogger(__name__)
-
+from app.database import get_db
+from app.models.candidate import Candidate, CandidateContact, CandidateResume
+from app.services.redis_client import redis_client
+from app.services.s3_client import s3_client
+from app.utils.logging import logger
 router = APIRouter()
 
 
-class CandidateUploadResponse(BaseModel):
-    """Response for candidate upload."""
-    candidate_id: str
-    status: str
-    num_chunks: int
+# ═══════════════════════════════════════════════════════════════
+# Request/Response Models
+# ═══════════════════════════════════════════════════════════════
+
+class CandidateCreateRequest(BaseModel):
+    """Request body for creating a candidate after form submission."""
+    temp_id: str = Field(..., description="Temporary ID from upload-resume endpoint")
+    full_name: str
+    years_experience: Optional[float] = None
+    professional_summary: Optional[str] = None
+    location: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+
+
+class UploadResumeResponse(BaseModel):
+    """Response from anonymous resume upload."""
+    temp_id: str
+    parsed_data: dict
     message: str
 
 
-@router.post("/upload", response_model=CandidateUploadResponse)
-async def upload_resume(
-    candidate_id: str,
-    file: UploadFile = File(...)
+class ParsedDataResponse(BaseModel):
+    """Response from fetching parsed data."""
+    temp_id: str
+    data: dict
+
+
+class CandidateCreateResponse(BaseModel):
+    """Response from candidate creation."""
+    candidate_id: str
+    status: str
+    message: str
+
+
+# ═══════════════════════════════════════════════════════════════
+# ENDPOINT 1: Anonymous Resume Upload (Parse Only)
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/upload-resume", response_model=UploadResumeResponse)
+async def upload_resume_anonymous(
+    file: UploadFile = File(..., description="Resume file (PDF, DOCX, or TXT)")
 ):
     """
-    Direct resume upload endpoint (for testing).
+    Stage 1: Anonymous resume upload with parse-only ingestion.
+
+    WORKFLOW:
+    1. Generate temp_id (UUID)
+    2. Upload resume to MinIO (resumes/{temp_id}/resume.pdf)
+    3. Queue parse-only job to ingestion worker
+    4. Wait for parsing to complete (poll Redis)
+    5. Return temp_id + parsed data for form pre-fill
+
+    CRITICAL: This does NOT create candidate in PostgreSQL or Qdrant!
+    Only caches parsed data in Redis with 1-hour TTL.
 
     Args:
-        candidate_id: Unique candidate ID
-        file: Resume file (PDF, DOCX, TXT)
+        file: Resume file upload
 
     Returns:
-        Upload result
+        {
+            "temp_id": str,
+            "parsed_data": {
+                "full_name": str,
+                "email": str,
+                "phone": str,
+                "skills": List[str],
+                "years_experience": float,
+                "location": str,
+                "professional_summary": str
+            },
+            "message": str
+        }
 
-    TODO: Implement for Days 1-4
-    Steps:
-    1. Validate file type and size
-    2. Save file temporarily
-    3. Call ingest_resume()
-    4. Return ingestion result
+    Raises:
+        400: Invalid file type
+        500: Upload or parsing failed
+        504: Parsing timeout (> 30 seconds)
     """
-    logger.info(f"Direct upload for candidate: {candidate_id}")
+    try:
+        # ════════════════════════════════════════════════════════
+        # STEP 1: Validate file type
+        # ════════════════════════════════════════════════════════
+        allowed_types = {".pdf", ".docx", ".doc", ".txt"}
+        file_ext = "." + file.filename.split(".")[-1].lower()
 
-    # TODO: Implement file upload and ingestion
+        if file_ext not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type: {file_ext}. Allowed: {allowed_types}"
+            )
 
-    return {
-        "candidate_id": candidate_id,
-        "status": "not_implemented",
-        "num_chunks": 0,
-        "message": "Resume upload will be implemented in Days 1-4"
-    }
+        # ════════════════════════════════════════════════════════
+        # STEP 2: Generate temp_id and upload to MinIO
+        # ════════════════════════════════════════════════════════
+        temp_id = str(uuid.uuid4())
+        file_bytes = await file.read()
+
+        # Determine content type based on file extension
+        content_type_map = {
+            ".pdf": "application/pdf",
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".doc": "application/msword",
+            ".txt": "text/plain"
+        }
+        content_type = content_type_map.get(file_ext, "application/octet-stream")
+
+        s3_url = await s3_client.upload_file(
+            file_data=file_bytes,
+            object_name=f"resumes/{temp_id}/resume{file_ext}",
+            content_type=content_type
+        )
+
+        logger.info(f"📤 Resume uploaded to MinIO: {s3_url} (temp_id: {temp_id})")
+
+        # ════════════════════════════════════════════════════════
+        # STEP 3: Queue parse-only ingestion job
+        # ════════════════════════════════════════════════════════
+        job_data = {
+            "job_id": f"parse_{temp_id}",
+            "candidate_id": temp_id,
+            "s3_resume_url": s3_url,
+            "mode": "parse_only"  # CRITICAL: Parse-only mode!
+        }
+
+        await redis_client.lpush("ingestion_queue", json.dumps(job_data))
+        logger.info(f"📋 Queued parse-only job for {temp_id}")
+
+        # ════════════════════════════════════════════════════════
+        # STEP 4: Wait for parsing to complete (poll Redis)
+        # ════════════════════════════════════════════════════════
+        max_retries = 30  # 30 seconds max
+        for i in range(max_retries):
+            cached = await redis_client.get(f"parsed_candidate:{temp_id}")
+            if cached:
+                parsed_data = json.loads(cached)
+                logger.info(f"✅ Parsing complete for {temp_id}")
+
+                return UploadResumeResponse(
+                    temp_id=temp_id,
+                    parsed_data=parsed_data,
+                    message=f"Resume parsed successfully. Use temp_id to create candidate."
+                )
+
+            await asyncio.sleep(1)
+
+        # Timeout after 30 seconds
+        raise HTTPException(
+            status_code=504,
+            detail="Resume parsing timeout. Please try again."
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error in upload_resume_anonymous: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to upload resume: {str(e)}"
+        )
 
 
-@router.get("/{candidate_id}")
-async def get_candidate_info(candidate_id: str):
+# ═══════════════════════════════════════════════════════════════
+# ENDPOINT 2: Get Parsed Data (Form Pre-Fill)
+# ═══════════════════════════════════════════════════════════════
+
+@router.get("/parsed/{temp_id}", response_model=ParsedDataResponse)
+async def get_parsed_data(temp_id: str):
     """
-    Get candidate information from vector store.
+    Stage 2: Retrieve cached parsed data for form pre-fill.
+
+    WORKFLOW:
+    1. Fetch from Redis: parsed_candidate:{temp_id}
+    2. If expired (> 1 hour) or not found, return 404
+    3. Return parsed data for form auto-fill
 
     Args:
-        candidate_id: Candidate ID
+        temp_id: Temporary ID from upload-resume endpoint
 
     Returns:
-        Candidate metadata and vector count
+        {
+            "temp_id": str,
+            "data": {
+                "full_name": str,
+                "email": str,
+                "phone": str,
+                "skills": List[str],
+                "years_experience": float,
+                "location": str,
+                "professional_summary": str
+            }
+        }
 
-    TODO: Implement for Days 1-4
+    Raises:
+        404: Session expired or invalid temp_id
     """
-    logger.info(f"Fetching info for candidate: {candidate_id}")
+    try:
+        cached = await redis_client.get(f"parsed_candidate:{temp_id}")
 
-    return {
-        "candidate_id": candidate_id,
-        "status": "not_implemented",
-        "message": "Candidate info retrieval will be implemented in Days 1-4"
-    }
+        if not cached:
+            raise HTTPException(
+                status_code=404,
+                detail="Session expired or invalid temp_id. Please upload resume again."
+            )
+
+        parsed_data = json.loads(cached)
+        logger.info(f"📋 Retrieved parsed data for {temp_id}")
+
+        return ParsedDataResponse(
+            temp_id=temp_id,
+            data=parsed_data
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error in get_parsed_data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve parsed data: {str(e)}"
+        )
 
 
-@router.delete("/{candidate_id}")
-async def delete_candidate(candidate_id: str):
+# ═══════════════════════════════════════════════════════════════
+# ENDPOINT 3: Create Candidate (Full Ingestion)
+# ═══════════════════════════════════════════════════════════════
+
+@router.post("/", response_model=CandidateCreateResponse)
+async def create_candidate(
+    request: CandidateCreateRequest,
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Delete candidate vectors from Qdrant.
+    Stage 3: Create candidate after form submission.
+
+    WORKFLOW:
+    1. Validate temp_id exists in Redis
+    2. Create candidate in PostgreSQL
+    3. Create contact record
+    4. Queue FULL ingestion job (with embeddings)
+    5. Clear Redis cache
+    6. Return candidate_id
+
+    CRITICAL: This triggers the FULL 7-stage ingestion pipeline!
 
     Args:
-        candidate_id: Candidate ID
+        request: Candidate data from form submission
+        db: Database session (injected)
 
     Returns:
-        Deletion result
+        {
+            "candidate_id": str,
+            "status": "ingestion_queued",
+            "message": str
+        }
 
-    TODO: Implement for Days 1-4
+    Raises:
+        400: Invalid or expired temp_id
+        500: Database or queue error
     """
-    logger.info(f"Deleting candidate: {candidate_id}")
+    try:
+        # ════════════════════════════════════════════════════════
+        # STEP 1: Validate temp_id exists in Redis
+        # ════════════════════════════════════════════════════════
+        cached = await redis_client.get(f"parsed_candidate:{request.temp_id}")
 
-    # TODO: Call delete_candidate_vectors()
+        if not cached:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid or expired temp_id. Please upload resume again."
+            )
 
-    return {
-        "candidate_id": candidate_id,
-        "status": "not_implemented",
-        "message": "Candidate deletion will be implemented in Days 1-4"
-    }
+        parsed_data = json.loads(cached)
+        logger.info(f"📋 Creating candidate from temp_id: {request.temp_id}")
 
+        # ════════════════════════════════════════════════════════
+        # STEP 2: Create candidate in PostgreSQL
+        # ════════════════════════════════════════════════════════
+        candidate = Candidate(
+            id=UUID(request.temp_id),  # Reuse temp_id!
+            full_name=request.full_name,
+            years_experience=request.years_experience,
+            professional_summary=request.professional_summary
+        )
 
-@router.post("/{candidate_id}/reindex")
-async def reindex_candidate(candidate_id: str):
-    """
-    Re-index candidate resume.
+        db.add(candidate)
+        await db.flush()  # Get candidate.id for foreign keys
 
-    Args:
-        candidate_id: Candidate ID
+        # ════════════════════════════════════════════════════════
+        # STEP 3: Create contact record
+        # ════════════════════════════════════════════════════════
+        if request.email or request.phone or request.location:
+            # Parse location if provided (e.g., "Seattle, WA 98101")
+            city = None
+            region = None
+            postal_code = None
+            if request.location:
+                import re
+                # Try to extract city, region, zip
+                match = re.match(r"([^,]+),\s*([A-Z]{2})\s*(\d{5})?", request.location)
+                if match:
+                    city = match.group(1)
+                    region = match.group(2)
+                    postal_code = match.group(3)
+                else:
+                    # Just use location as city if parsing fails
+                    city = request.location
 
-    Returns:
-        Re-indexing result
+            contact = CandidateContact(
+                candidate_id=candidate.id,
+                email=request.email,
+                phone=request.phone,
+                city=city,
+                region=region,
+                postal_code=postal_code
+            )
+            db.add(contact)
 
-    TODO: Implement for Days 1-4
-    """
-    logger.info(f"Re-indexing candidate: {candidate_id}")
+        await db.commit()
+        await db.refresh(candidate)
 
-    return {
-        "candidate_id": candidate_id,
-        "status": "not_implemented",
-        "message": "Re-indexing will be implemented in Days 1-4"
-    }
+        logger.info(f"✅ Candidate created: {request.full_name} ({candidate.id})")
+
+        # ════════════════════════════════════════════════════════
+        # STEP 4: Queue FULL ingestion job
+        # ════════════════════════════════════════════════════════
+        # Get s3_url from parsed_data (stored during parse_only phase)
+        s3_url = parsed_data.get("s3_resume_url", f"resumes/{request.temp_id}/resume.pdf")
+
+        job_data = {
+            "job_id": f"ingest_{request.temp_id}",
+            "candidate_id": request.temp_id,
+            "s3_resume_url": s3_url,
+            "mode": "full"  # FULL pipeline with embeddings!
+        }
+
+        await redis_client.lpush("ingestion_queue", json.dumps(job_data))
+        logger.info(f"📋 Queued FULL ingestion job for {candidate.id}")
+
+        # ════════════════════════════════════════════════════════
+        # STEP 5: Clear Redis cache
+        # ════════════════════════════════════════════════════════
+        await redis_client.delete(f"parsed_candidate:{request.temp_id}")
+        logger.info(f"🗑️  Cleared Redis cache for {request.temp_id}")
+
+        # ════════════════════════════════════════════════════════
+        # STEP 6: Return response
+        # ════════════════════════════════════════════════════════
+        return CandidateCreateResponse(
+            candidate_id=str(candidate.id),
+            status="ingestion_queued",
+            message=f"Candidate created successfully. Full ingestion in progress."
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error in create_candidate: {e}")
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create candidate: {str(e)}"
+        )

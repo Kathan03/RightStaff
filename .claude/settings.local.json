@@ -44,7 +44,11 @@
       "Bash(timeout 60 ../venv/Scripts/python:*)",
       "Bash(timeout 90 ../venv/Scripts/python:*)",
       "Bash(find:*)",
-      "Bash(timeout 120 bash -c \"../venv/Scripts/python clear_all_data.py && ../venv/Scripts/python populate_dummy_data.py\")"
+      "Bash(timeout 120 bash -c \"../venv/Scripts/python clear_all_data.py && ../venv/Scripts/python populate_dummy_data.py\")",
+      "Bash(timeout 60 bash -c 'curl -X POST \"\"http://localhost:8000/api/v1/candidates/upload-resume\"\" -F \"\"file=@/tmp/test_resume.txt\"\" -s | python -m json.tool')",
+      "Bash(timeout 60 bash -c 'curl -X POST \"\"http://localhost:8000/api/v1/candidates/upload-resume\"\" -F \"\"file=@/tmp/test_resume.txt\"\" -s')",
+      "Bash(timeout 60 bash -c 'RESPONSE=$(curl -X POST \"\"http://localhost:8000/api/v1/candidates/upload-resume\"\" -F \"\"file=@/tmp/test_resume.txt\"\" -s); echo \"\"$RESPONSE\"\" | python -c \"\"import sys, json; data = json.load(sys.stdin); print(data[\\\"\"temp_id\\\"\"])\"\"')",
+      "Bash(TEMP_ID=\"232fe9d2-dced-4f41-ac13-cd86272bdcc8\")"
     ],
     "deny": [],
     "ask": []

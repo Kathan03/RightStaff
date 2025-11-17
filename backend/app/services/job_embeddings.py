@@ -150,5 +150,89 @@ class JobEmbeddingService:
             # Non-critical - log but don't fail
             logger.warning(f"Failed to store job vectors: {e}")
 
+
+async def generate_job_embeddings(
+    job_id: str,
+    title: str,
+    description: str,
+    required_skills: List[str]
+) -> Dict:
+    """
+    Generate dual job embeddings (profile + skills) - STANDALONE FUNCTION.
+
+    This is a STANDALONE function that can be called:
+    - During job creation (webhook) ← PRIMARY USE CASE
+    - During ranking (if cache miss) ← FALLBACK ONLY
+
+    ARCHITECTURE:
+    - Profile embedding: Semantic representation of job description
+    - Skills embedding: Ontology-expanded skills representation
+
+    Args:
+        job_id: Job UUID
+        title: Job title (e.g., "Senior Python Engineer")
+        description: Job description text
+        required_skills: List of required skill names (already expanded)
+
+    Returns:
+        {
+            "job_id": str,
+            "profile_vector": List[float],  # 384-dim (all-MiniLM-L6-v2)
+            "skills_vector": List[float],   # 384-dim
+            "profile_text": str,            # Text used for profile embedding
+            "skills_text": str              # Text used for skills embedding
+        }
+
+    Example:
+        embeddings = await generate_job_embeddings(
+            job_id="123-456-789",
+            title="Senior Python Engineer",
+            description="We're looking for...",
+            required_skills=["Python", "AWS", "Docker", "FastAPI"]
+        )
+        # Returns dict with two 384-dim vectors
+    """
+    logger.info(f"🎯 Generating job embeddings for {job_id}")
+
+    # ════════════════════════════════════════════════════════════
+    # STEP 1: Create profile text (title + description)
+    # ════════════════════════════════════════════════════════════
+    profile_text = f"{title}\n\n{description}"
+
+    # Truncate if too long (model max is 512 tokens)
+    if len(profile_text) > 2000:
+        profile_text = profile_text[:2000]
+        logger.warning(f"   Profile text truncated to 2000 chars")
+
+    logger.info(f"   Profile text: {len(profile_text)} chars")
+
+    # ════════════════════════════════════════════════════════════
+    # STEP 2: Create skills text (space-separated)
+    # ════════════════════════════════════════════════════════════
+    skills_text = " ".join(required_skills)
+    logger.info(f"   Skills text: {len(required_skills)} skills")
+
+    # ════════════════════════════════════════════════════════════
+    # STEP 3: Generate embeddings using sentence-transformers
+    # ════════════════════════════════════════════════════════════
+    profile_vector = await embedding_service.embed_text(profile_text)
+    skills_vector = await embedding_service.embed_text(skills_text)
+
+    logger.info(f"   Generated vectors:")
+    logger.info(f"     Profile: {len(profile_vector)} dims")
+    logger.info(f"     Skills: {len(skills_vector)} dims")
+
+    # ════════════════════════════════════════════════════════════
+    # STEP 4: Return embeddings dict
+    # ════════════════════════════════════════════════════════════
+    return {
+        "job_id": job_id,
+        "profile_vector": profile_vector,
+        "skills_vector": skills_vector,
+        "profile_text": profile_text,
+        "skills_text": skills_text
+    }
+
+
 # Singleton instance
 job_embedding_service = JobEmbeddingService()

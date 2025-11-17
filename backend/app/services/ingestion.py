@@ -169,34 +169,106 @@ class IngestionWorker:
     
     async def process_job(self, job_data: dict):
         """
-        Process a single ingestion job - THE COMPLETE PIPELINE.
-        
-        Pipeline stages (Day 3 - 7 stages):
+        Process a single ingestion job.
+
+        MODES:
+        - parse_only: Extract text and fields only (Stage 1 - Resume Upload)
+        - full: Complete 7-stage pipeline with embeddings (Stage 3 - Candidate Creation)
+
+        Pipeline stages (full mode):
         1. Fetch candidate details from PostgreSQL
         2. Download resume from MinIO
         3. Parse resume (extract text)
-        4. Extract skills from text (NEW: Day 3)
+        4. Extract skills from text
         5. Chunk text (split into semantic units)
         6. Generate embeddings (convert to vectors)
         7. Store in Qdrant (save vectors + metadata with skills)
-        
+
         Error handling:
         - Transient errors → retry with exponential backoff (tenacity)
         - Permanent errors → fail immediately, move to DLQ
-        
+
         Args:
             job_data: Job metadata from Redis queue
         """
         start_time = datetime.utcnow()
+        candidate_id = job_data["candidate_id"]
+        s3_url = job_data["s3_resume_url"]
+        mode = job_data.get("mode", "full")  # Default to full for backward compatibility
+
+        logger.info(f"🚀 Starting ingestion for {candidate_id} (mode: {mode})")
+
+        # ══════════════════════════════════════════════════════════════
+        # MODE: PARSE_ONLY (Stage 1 - Resume Upload)
+        # ══════════════════════════════════════════════════════════════
+        if mode == "parse_only":
+            try:
+                # Download resume from MinIO
+                logger.info(f"[parse_only] Downloading resume from {s3_url}")
+                resume_bytes = await s3_client.download_file(s3_url)
+                logger.info(f"📥 Downloaded resume from {s3_url}")
+
+                # Parse text from resume
+                from app.services.parsers import parse_resume_text
+
+                # Extract file extension from s3_url
+                file_ext = s3_url.split('.')[-1] if '.' in s3_url else 'pdf'
+                file_type = f".{file_ext}"
+
+                text = await parse_resume_text(resume_bytes, file_type)
+                logger.info(f"📄 Parsed resume text ({len(text)} chars)")
+
+                # Extract fields
+                from app.services.parsers import (
+                    extract_name,
+                    extract_email,
+                    extract_phone,
+                    extract_location,
+                    calculate_years_experience
+                )
+
+                # Extract skills using ontology service
+                extracted_skills = await extract_skills_from_text(text)
+
+                parsed_data = {
+                    "full_name": extract_name(text) or "Unknown",
+                    "email": extract_email(text),
+                    "phone": extract_phone(text),
+                    "skills": extracted_skills,
+                    "years_experience": calculate_years_experience(text),
+                    "location": extract_location(text),
+                    "professional_summary": text[:500],  # First 500 chars
+                    "s3_resume_url": s3_url  # Store s3_url for later use
+                }
+
+                # Cache in Redis with 1-hour TTL
+                await redis_client.set(
+                    f"parsed_candidate:{candidate_id}",
+                    json.dumps(parsed_data),
+                    ex=3600  # 1 hour
+                )
+
+                logger.info(f"✅ Parse-only complete for {candidate_id}")
+                logger.info(f"   Name: {parsed_data['full_name']}")
+                logger.info(f"   Email: {parsed_data['email']}")
+                logger.info(f"   Skills: {len(parsed_data['skills'])} found")
+
+                return  # STOP HERE - no embeddings, no Qdrant, no PostgreSQL!
+
+            except Exception as e:
+                logger.error(f"❌ Parse-only failed for {candidate_id}: {e}")
+                raise
+
+        # ══════════════════════════════════════════════════════════════
+        # MODE: FULL (Stage 3 - Complete 7-Stage Pipeline)
+        # ══════════════════════════════════════════════════════════════
         async with AsyncSessionLocal() as db:
             try:
-                candidate_id = job_data["candidate_id"]
-                s3_url = job_data["s3_resume_url"]
                 retry_count = job_data.get("retry_count", 0)
-                
+
                 if retry_count > 0:
                     logger.warning(f"⚠️  Retry attempt for job {job_data['job_id']}")
-                
+
                 # ========================================
                 # STAGE 1: Fetch candidate details
                 # ========================================

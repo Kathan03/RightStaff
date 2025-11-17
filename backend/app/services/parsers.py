@@ -248,14 +248,14 @@ def chunk_text(
 def extract_metadata(text: str) -> Dict[str, Any]:
     """
     Extract metadata from resume text (name, email, phone, etc.).
-    
+
     TODO: Implement for Days 5-8 (when building ranking features)
     - Use regex to extract email, phone
     - Use spaCy NER to extract name, location
     - Parse education section (degrees, universities)
     - Parse work experience (companies, titles, dates)
     - Calculate total years of experience
-    
+
     For now, returns empty structure (not needed for Day 2 pipeline).
     """
     logger.debug("extract_metadata not yet implemented (scheduled for Days 5-8)")
@@ -268,3 +268,170 @@ def extract_metadata(text: str) -> Dict[str, Any]:
         "education": [],
         "work_history": []
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Field Extraction Utilities (for parse-only mode)
+# ═══════════════════════════════════════════════════════════════
+
+import re
+from typing import Optional
+from datetime import datetime
+
+
+async def parse_resume_text(resume_bytes: bytes, file_type: str) -> str:
+    """
+    Parse resume bytes to text (async wrapper).
+
+    Wrapper around existing parse_resume function for parse-only mode.
+
+    Args:
+        resume_bytes: Resume file bytes
+        file_type: File extension (.pdf, .docx, .txt)
+
+    Returns:
+        Extracted text
+    """
+    # Use a dummy filename with the correct extension
+    filename = f"resume{file_type}"
+
+    # Call the async parse_resume function
+    result = await parse_resume(resume_bytes, filename)
+    return result["text"]
+
+
+def extract_name(text: str) -> Optional[str]:
+    """
+    Extract candidate name from resume text.
+
+    HEURISTICS:
+    - First non-empty line often contains name
+    - Look for capitalized words at start
+    - Exclude common headers (Resume, CV, etc.)
+
+    Args:
+        text: Resume text
+
+    Returns:
+        Extracted name or None
+    """
+    lines = text.split("\n")
+    excluded_words = {"resume", "cv", "curriculum vitae", "professional profile"}
+
+    for line in lines[:10]:  # Check first 10 lines
+        line = line.strip()
+        if not line:
+            continue
+
+        # Skip common headers
+        if line.lower() in excluded_words:
+            continue
+
+        # Look for capitalized words (likely a name)
+        if re.match(r"^[A-Z][a-z]+ [A-Z][a-z]+", line):
+            return line
+
+    return None
+
+
+def extract_email(text: str) -> Optional[str]:
+    """
+    Extract email address from resume text.
+
+    Pattern: word@word.tld
+
+    Args:
+        text: Resume text
+
+    Returns:
+        Email address or None
+    """
+    pattern = r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"
+    match = re.search(pattern, text)
+    return match.group(0) if match else None
+
+
+def extract_phone(text: str) -> Optional[str]:
+    """
+    Extract phone number from resume text.
+
+    Patterns:
+    - (123) 456-7890
+    - 123-456-7890
+    - 123.456.7890
+    - +1 123 456 7890
+
+    Args:
+        text: Resume text
+
+    Returns:
+        Phone number or None
+    """
+    patterns = [
+        r"\(\d{3}\)\s*\d{3}[-.\s]?\d{4}",  # (123) 456-7890
+        r"\d{3}[-.\s]?\d{3}[-.\s]?\d{4}",  # 123-456-7890
+        r"\+\d{1,3}\s?\d{3}\s?\d{3}\s?\d{4}"  # +1 123 456 7890
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(0)
+
+    return None
+
+
+def extract_location(text: str) -> Optional[str]:
+    """
+    Extract location from resume text.
+
+    HEURISTICS:
+    - Look for city, state patterns
+    - Look for zip codes
+    - Common location keywords
+
+    Args:
+        text: Resume text
+
+    Returns:
+        Location string or None
+    """
+    # Pattern: City, State ZIP
+    pattern = r"[A-Z][a-z]+,\s*[A-Z]{2}\s*\d{5}"
+    match = re.search(pattern, text)
+    if match:
+        return match.group(0)
+
+    # Pattern: City, State
+    pattern = r"[A-Z][a-z]+,\s*[A-Z]{2}\b"
+    match = re.search(pattern, text)
+    if match:
+        return match.group(0)
+
+    return None
+
+
+def calculate_years_experience(text: str) -> Optional[float]:
+    """
+    Calculate years of experience from resume text.
+
+    HEURISTICS:
+    - Find date ranges (Jan 2020 - Dec 2023)
+    - Calculate total duration
+    - Look for explicit "X years experience" mentions
+
+    Args:
+        text: Resume text
+
+    Returns:
+        Years of experience or None
+    """
+    # Pattern: "X years of experience"
+    pattern = r"(\d+\.?\d*)\s*(?:\+)?\s*years?\s+(?:of\s+)?experience"
+    match = re.search(pattern, text, re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+
+    # Pattern: Date ranges (TODO: Implement date parsing)
+    # For now, return None (can be enhanced later)
+    return None

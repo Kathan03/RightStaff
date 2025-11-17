@@ -459,7 +459,7 @@ class VectorStore:
     def health_check(self) -> bool:
         """
         Check if Qdrant is responsive.
-        
+
         Returns:
             True if healthy, False otherwise
         """
@@ -469,6 +469,45 @@ class VectorStore:
         except Exception as e:
             logger.error(f"Qdrant health check failed: {e}")
             return False
+
+    def initialize_collections(self):
+        """
+        Initialize both candidates_v1 and jobs_v1 collections.
+
+        Called during application startup (main.py).
+
+        This ensures both collections exist before any operations.
+        Creates collections with proper vector configuration if they don't exist.
+        """
+        # Candidates collection
+        try:
+            self.client.get_collection(self.collection_name)
+            logger.info(f"✅ {self.collection_name} collection exists")
+        except Exception:
+            logger.info(f"🆕 Creating {self.collection_name} collection")
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(
+                    size=384,  # all-MiniLM-L6-v2 dimension
+                    distance=Distance.COSINE
+                )
+            )
+
+        # Jobs collection
+        try:
+            self.client.get_collection(self.jobs_collection_name)
+            logger.info(f"✅ {self.jobs_collection_name} collection exists")
+        except Exception:
+            logger.info(f"🆕 Creating {self.jobs_collection_name} collection")
+            self.client.create_collection(
+                collection_name=self.jobs_collection_name,
+                vectors_config=VectorParams(
+                    size=384,
+                    distance=Distance.COSINE
+                )
+            )
+
+        logger.info("✅ Both collections initialized")
 
 
 # Global vector store instance
