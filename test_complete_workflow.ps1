@@ -214,7 +214,7 @@ try {
 
         Write-Host "   Match Reasons:" -ForegroundColor Cyan
         foreach ($reason in $topCandidate.reasons) {
-            Write-Host "   ✓ $reason" -ForegroundColor Gray
+            Write-Host "   - $reason" -ForegroundColor Gray
         }
 
         Write-Host "`n   Score Breakdown:" -ForegroundColor Cyan

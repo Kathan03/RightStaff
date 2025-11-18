@@ -16,7 +16,7 @@ import json
 from datetime import datetime
 from typing import Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text, delete
 from sqlalchemy.orm import selectinload
 
 # NEW: Retry logic imports
@@ -343,11 +343,7 @@ class IngestionWorker:
 
                 # Delete existing skills for this candidate (idempotent re-indexing)
                 await db.execute(
-                    select(CandidateSkill).where(CandidateSkill.candidate_id == candidate_id)
-                )
-                await db.execute(
-                    "DELETE FROM rightstaff.candidate_skill WHERE candidate_id = :cid",
-                    {"cid": str(candidate_id)}
+                    delete(CandidateSkill).where(CandidateSkill.candidate_id == candidate_id)
                 )
 
                 # For each extracted skill, find or create in skill table
@@ -385,10 +381,43 @@ class IngestionWorker:
                 metrics_collector.record_timing("ingestion_stage_4.5_store_skills", stage_start)
 
                 # ========================================
+                # STAGE 4.6: Store resume record in PostgreSQL
+                # ========================================
+                stage_start = datetime.utcnow()
+                logger.info(f"[4.6/8] Storing resume record in PostgreSQL")
+
+                from app.models.candidate import CandidateResume
+
+                # Extract file extension from s3_url
+                file_ext = None
+                if '.' in s3_url:
+                    file_ext = '.' + s3_url.split('.')[-1].lower()
+
+                # Mark all previous resumes as not latest
+                await db.execute(
+                    text("UPDATE rightstaff.candidate_resume SET is_latest = false WHERE candidate_id = :cid"),
+                    {"cid": str(candidate_id)}
+                )
+
+                # Create new resume record
+                resume_record = CandidateResume(
+                    candidate_id=candidate_id,
+                    s3_url=s3_url,
+                    file_type=file_ext,
+                    is_latest=True,
+                    uploaded_at=datetime.utcnow()
+                )
+                db.add(resume_record)
+                await db.commit()
+
+                logger.info(f"✅ Stored resume record: {s3_url} (type: {file_ext})")
+                metrics_collector.record_timing("ingestion_stage_4.6_store_resume", stage_start)
+
+                # ========================================
                 # STAGE 5: Chunk text
                 # ========================================
                 stage_start = datetime.utcnow()
-                logger.info(f"[5/7] Chunking text (size=400, overlap=50)")
+                logger.info(f"[5/8] Chunking text (size=400, overlap=50)")
                 
                 chunks = chunk_text(
                     text,
@@ -407,7 +436,7 @@ class IngestionWorker:
                 # STAGE 6: Generate embeddings (profile, skills, chunks)
                 # ========================================
                 stage_start = datetime.utcnow()
-                logger.info(f"[6/7] Generating embeddings (1 profile + 1 skills + {len(chunks)} chunks)")
+                logger.info(f"[6/8] Generating embeddings (1 profile + 1 skills + {len(chunks)} chunks)")
 
                 # 6a. Generate profile embedding (full resume summary)
                 profile_text = f"{candidate.full_name}\n{text[:1000]}"  # Use first 1000 chars as profile
@@ -428,7 +457,7 @@ class IngestionWorker:
                 # STAGE 7: Store in Qdrant (profile + skills + chunks)
                 # ========================================
                 stage_start = datetime.utcnow()
-                logger.info(f"[7/7] Storing vectors in Qdrant")
+                logger.info(f"[7/8] Storing vectors in Qdrant")
 
                 # Delete old vectors first (idempotent re-indexing)
                 logger.info(f"Deleting old vectors for candidate {candidate_id} (if any)")
