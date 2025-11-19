@@ -212,7 +212,7 @@ class IngestionWorker:
                 resume_bytes = await s3_client.download_file(s3_url)
                 logger.info(f"📥 Downloaded resume from {s3_url}")
 
-                # Parse text from resume
+                # Parse text from resume using Unstructured library
                 from app.services.parsers import parse_resume_text
 
                 # Extract file extension from s3_url
@@ -222,28 +222,73 @@ class IngestionWorker:
                 text = await parse_resume_text(resume_bytes, file_type)
                 logger.info(f"📄 Parsed resume text ({len(text)} chars)")
 
-                # Extract fields
-                from app.services.parsers import (
-                    extract_name,
-                    extract_email,
-                    extract_phone,
-                    extract_location,
-                    calculate_years_experience
-                )
+                # ══════════════════════════════════════════════════════════════
+                # LLM-BASED FIELD EXTRACTION (with regex fallback)
+                # ══════════════════════════════════════════════════════════════
+                from app.config import settings
 
-                # Extract skills using ontology service
-                extracted_skills = await extract_skills_from_text(text)
+                parsed_data = None
+                llm_parsing_attempted = False
 
-                parsed_data = {
-                    "full_name": extract_name(text) or "Unknown",
-                    "email": extract_email(text),
-                    "phone": extract_phone(text),
-                    "skills": extracted_skills,
-                    "years_experience": calculate_years_experience(text),
-                    "location": extract_location(text),
-                    "professional_summary": text[:500],  # First 500 chars
-                    "s3_resume_url": s3_url  # Store s3_url for later use
-                }
+                # Try LLM parsing if enabled
+                if settings.use_llm_parsing:
+                    try:
+                        logger.info("🤖 Attempting LLM-based field extraction...")
+                        from app.services.llm_parser import get_llm_parser
+
+                        llm_parser = get_llm_parser()
+                        llm_result = await llm_parser.parse_resume(text)
+
+                        # Extract skills using ontology service (complement LLM skills)
+                        ontology_skills = await extract_skills_from_text(text)
+
+                        # Merge LLM skills with ontology skills (deduplicate)
+                        llm_skills = llm_result.get("skills", [])
+                        all_skills = list(set(llm_skills + ontology_skills))
+
+                        parsed_data = {
+                            "full_name": llm_result.get("full_name") or "Unknown",
+                            "email": llm_result.get("email"),
+                            "phone": llm_result.get("phone"),
+                            "skills": all_skills,
+                            "years_experience": llm_result.get("years_experience"),
+                            "location": llm_result.get("location", {}).get("city"),  # Flatten location
+                            "professional_summary": llm_result.get("professional_summary") or text[:500],
+                            "s3_resume_url": s3_url
+                        }
+
+                        llm_parsing_attempted = True
+                        logger.info(f"✅ LLM parsing successful")
+                        logger.info(f"   LLM Skills: {len(llm_skills)}, Ontology Skills: {len(ontology_skills)}, Total: {len(all_skills)}")
+
+                    except Exception as e:
+                        logger.warning(f"⚠️  LLM parsing failed, falling back to regex: {e}")
+                        llm_parsing_attempted = False
+
+                # Fallback to regex-based extraction if LLM disabled or failed
+                if not llm_parsing_attempted or parsed_data is None:
+                    logger.info("🔄 Using regex-based field extraction (fallback)")
+                    from app.services.parsers import (
+                        extract_name,
+                        extract_email,
+                        extract_phone,
+                        extract_location,
+                        calculate_years_experience
+                    )
+
+                    # Extract skills using ontology service
+                    extracted_skills = await extract_skills_from_text(text)
+
+                    parsed_data = {
+                        "full_name": extract_name(text) or "Unknown",
+                        "email": extract_email(text),
+                        "phone": extract_phone(text),
+                        "skills": extracted_skills,
+                        "years_experience": calculate_years_experience(text),
+                        "location": extract_location(text),
+                        "professional_summary": text[:500],  # First 500 chars
+                        "s3_resume_url": s3_url
+                    }
 
                 # Cache in Redis with 1-hour TTL
                 await redis_client.set(
@@ -253,6 +298,7 @@ class IngestionWorker:
                 )
 
                 logger.info(f"✅ Parse-only complete for {candidate_id}")
+                logger.info(f"   Method: {'LLM' if llm_parsing_attempted else 'Regex'}")
                 logger.info(f"   Name: {parsed_data['full_name']}")
                 logger.info(f"   Email: {parsed_data['email']}")
                 logger.info(f"   Skills: {len(parsed_data['skills'])} found")
