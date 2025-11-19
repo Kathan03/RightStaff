@@ -13,10 +13,10 @@ import logging
 import json
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, and_
 
 from app.database import get_db
-from app.models.candidate import Job, JobStatus
+from app.models.candidate import Job, JobStatus, Application, ApplicationStatus, Candidate
 from app.services.sql_filter import apply_combined_sql_gates
 from app.services.redis_client import redis_client
 
@@ -93,16 +93,160 @@ async def create_job(
     }
 
 
-@router.post("/rank")
+@router.post("/{job_id}/apply", status_code=status.HTTP_201_CREATED)
+async def apply_to_job(
+    job_id: str,
+    candidate_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Submit job application for a candidate.
+
+    BUSINESS RULES:
+    - Job must be in 'open' status
+    - Candidate must exist in database
+    - One application per candidate per job (enforced by DB UNIQUE constraint)
+
+    Args:
+        job_id: UUID of the job
+        candidate_id: UUID of the candidate
+        db: Database session (injected)
+
+    Returns:
+        {
+            "application_id": str,
+            "candidate_id": str,
+            "job_id": str,
+            "status": str,
+            "applied_at": str,
+            "message": str
+        }
+
+    Raises:
+        404: Job or candidate not found
+        400: Job not open for applications
+        409: Candidate already applied (duplicate)
+        500: Database error
+
+    Example:
+        POST /api/v1/jobs/123e4567-e89b-12d3-a456-426614174000/apply
+        Body: {"candidate_id": "987fcdeb-51a2-43f1-b123-456789abcdef"}
+
+        Response (201):
+        {
+            "application_id": "111e4567-e89b-12d3-a456-426614174000",
+            "status": "applied",
+            "message": "Application submitted successfully for Senior Python Engineer"
+        }
+    """
+    try:
+        # ════════════════════════════════════════════════════════
+        # STEP 1: Validate job exists and is open
+        # ════════════════════════════════════════════════════════
+        job_result = await db.execute(
+            select(Job).where(Job.id == job_id)
+        )
+        job = job_result.scalar_one_or_none()
+
+        if not job:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Job {job_id} not found"
+            )
+
+        if job.status != JobStatus.open:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job '{job.title}' is not open for applications (current status: {job.status})"
+            )
+
+        # ════════════════════════════════════════════════════════
+        # STEP 2: Validate candidate exists
+        # ════════════════════════════════════════════════════════
+        candidate_result = await db.execute(
+            select(Candidate).where(Candidate.id == candidate_id)
+        )
+        candidate = candidate_result.scalar_one_or_none()
+
+        if not candidate:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Candidate {candidate_id} not found"
+            )
+
+        # ════════════════════════════════════════════════════════
+        # STEP 3: Check for duplicate application
+        # ════════════════════════════════════════════════════════
+        existing_result = await db.execute(
+            select(Application).where(
+                and_(
+                    Application.candidate_id == candidate_id,
+                    Application.job_id == job_id
+                )
+            )
+        )
+        existing = existing_result.scalar_one_or_none()
+
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Candidate '{candidate.full_name}' already applied to '{job.title}' "
+                    f"(application_id: {existing.id}, status: {existing.status})"
+                )
+            )
+
+        # ════════════════════════════════════════════════════════
+        # STEP 4: Create application
+        # ════════════════════════════════════════════════════════
+        application = Application(
+            candidate_id=candidate_id,
+            job_id=job_id,
+            status=ApplicationStatus.applied
+        )
+
+        db.add(application)
+        await db.commit()
+        await db.refresh(application)
+
+        logger.info(
+            f"✅ Application created: {candidate.full_name} → {job.title} "
+            f"(application_id: {application.id})"
+        )
+
+        # ════════════════════════════════════════════════════════
+        # STEP 5: Return response
+        # ════════════════════════════════════════════════════════
+        return {
+            "application_id": str(application.id),
+            "candidate_id": str(candidate_id),
+            "job_id": str(job_id),
+            "status": application.status.value,
+            "applied_at": application.applied_at.isoformat(),
+            "message": f"Application submitted successfully for {job.title}"
+        }
+
+    except HTTPException:
+        # Re-raise HTTP exceptions (4xx errors)
+        raise
+    except Exception as e:
+        # Log unexpected errors and return 500
+        logger.error(f"❌ Error creating application: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create application: {str(e)}"
+        )
+
+
+@router.post("/rank") #It just filters by SQL gates no ranking is done.
 async def rank_candidates(
     request: RankingRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Trigger candidate ranking for a job.
+    Trigger candidate filtering for a job.
     
-    Day 3: SQL gating only (must-have skills, years, location)
-    Days 5-8: Will add vector search + semantic ranking
+    SQL gating only (must-have skills, years, location)
     
     Args:
         request: Ranking request (job_id, use_cache)
@@ -121,10 +265,32 @@ async def rank_candidates(
         if not job:
             raise HTTPException(status_code=404, detail=f"Job {request.job_id} not found")
         
-        logger.info(f"🎯 Ranking candidates for job: {job.title}")
-        
-        # Apply SQL gating
+        logger.info(f"🎯 SQL filtering only candidates who applied to job: {job.title}")
+
+        # Get candidates who applied to this job
+        from app.models.candidate import Application
+        application_result = await db.execute(
+            select(Application.candidate_id)
+            .where(Application.job_id == request.job_id)
+        )
+        applied_candidate_ids = [str(row[0]) for row in application_result.all()]
+
+        logger.info(f"📋 {len(applied_candidate_ids)} candidates applied to job")
+
+        if not applied_candidate_ids:
+            logger.warning(f"⚠️  No applications found for job {request.job_id}")
+            return jsonable_encoder({
+                "status": "completed",
+                "job_id": str(job.id),
+                "job_title": job.title,
+                "total_qualified": 0,
+                "pipeline_stage": "sql_gating_only",
+                "note": "No candidates have applied to this job yet"
+            })
+
+        # Apply SQL gating ONLY on candidates who applied
         qualified_candidate_ids = await apply_combined_sql_gates(
+            application_ids=applied_candidate_ids,  # Filter by applications first!
             must_have_skills=job.must_have_skills_json or [],
             min_years_experience=float(job.min_years_experience) if job.min_years_experience else None,
             max_years_experience=float(job.max_years_experience) if job.max_years_experience else None,
@@ -216,10 +382,6 @@ async def get_job_rankings(
     }
 
 
-# ========================================
-# NEW DAY 4: Complete Ranking Pipeline
-# ========================================
-
 from app.services.ranking import ranking_service
 from pydantic import UUID4
 
@@ -248,14 +410,14 @@ class FullRankingRequest(BaseModel):
     use_cache: bool = True
 
 
-@router.post("/{job_id}/rank_full", response_model=RankingResponse)
+@router.post("/{job_id}/rank_full", response_model=RankingResponse) #Actually ranks the candidtaes
 async def rank_candidates_full(
     job_id: str,
     request: FullRankingRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Generate complete ranked candidate list for a job (Day 4).
+    Generate complete ranked candidate list for a job.
 
     This is the main ranking endpoint that:
     1. Applies SQL gates (hard filters)

@@ -86,3 +86,172 @@ async def candidate_updated_webhook(
     except Exception as e:
         logger.error(f"Webhook processing error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════
+# Job Ingestion Webhook
+# ═══════════════════════════════════════════════════════════════
+
+from typing import List, Optional
+
+
+class JobIngestionRequest(BaseModel):
+    """Request body for job ingestion webhook."""
+    job_id: str
+    title: str
+    description: str
+    required_skills: List[str]
+    must_have_skills: Optional[List[str]] = None
+    preferred_skills: Optional[List[str]] = None
+
+
+@router.post("/job-ingestion")
+async def job_ingestion_webhook(request: JobIngestionRequest):
+    """
+    Webhook called by Portal team when job is created/updated.
+
+    WORKFLOW:
+    1. Expand skills using ontology
+    2. Generate dual embeddings (profile + skills)
+    3. Store in jobs_v1 Qdrant collection
+    4. Cache in Redis (1 hour TTL)
+
+    CRITICAL: This creates embeddings at JOB CREATION TIME,
+    not during ranking. Ranking will fetch these pre-computed embeddings.
+
+    Args:
+        request: Job data from Portal
+
+    Returns:
+        {
+            "status": "success",
+            "job_id": str,
+            "embeddings_created": bool,
+            "cached": bool
+        }
+
+    Example:
+        POST /api/v1/webhooks/job-ingestion
+        Body: {
+            "job_id": "123e4567-e89b-12d3-a456-426614174000",
+            "title": "Senior Python Engineer",
+            "description": "We're looking for...",
+            "required_skills": ["Python", "AWS", "Docker"],
+            "must_have_skills": ["Python"],
+            "preferred_skills": ["FastAPI", "PostgreSQL"]
+        }
+
+        Response:
+        {
+            "status": "success",
+            "job_id": "123e4567-e89b-12d3-a456-426614174000",
+            "embeddings_created": true,
+            "cached": true
+        }
+    """
+    try:
+        logger.info(f"📥 Job ingestion webhook triggered for: {request.title}")
+
+        # ════════════════════════════════════════════════════════
+        # STEP 1: Expand skills using ontology
+        # ════════════════════════════════════════════════════════
+        from app.services.ontology import expand_skills, normalize_skill
+
+        # Normalize and expand skills
+        normalized_skills = []
+        for skill in request.required_skills:
+            normalized = normalize_skill(skill, use_taxonomy=True)
+            if normalized:
+                normalized_skills.append(normalized)
+
+        # Expand skills with variants
+        expanded_skills = await expand_skills(normalized_skills, use_taxonomy=True)
+
+        # Remove duplicates
+        expanded_skills = list(set(expanded_skills))
+        logger.info(f"   Expanded {len(request.required_skills)} skills → {len(expanded_skills)}")
+
+        # ════════════════════════════════════════════════════════
+        # STEP 2: Generate job embeddings
+        # ════════════════════════════════════════════════════════
+        from app.services.job_embeddings import generate_job_embeddings
+
+        embeddings = await generate_job_embeddings(
+            job_id=request.job_id,
+            title=request.title,
+            description=request.description,
+            required_skills=expanded_skills
+        )
+
+        logger.info(f"   Generated embeddings:")
+        logger.info(f"     Profile vector: {len(embeddings['profile_vector'])} dims")
+        logger.info(f"     Skills vector: {len(embeddings['skills_vector'])} dims")
+
+        # ════════════════════════════════════════════════════════
+        # STEP 3: Store in Qdrant jobs_v1 collection
+        # ════════════════════════════════════════════════════════
+        from app.services.vector_store import vector_store
+        from datetime import datetime
+
+        points = [
+            {
+                "id": f"{request.job_id}_profile",
+                "vector": embeddings["profile_vector"],
+                "payload": {
+                    "job_id": request.job_id,
+                    "type": "profile",
+                    "title": request.title,
+                    "created_at": datetime.utcnow().isoformat()
+                }
+            },
+            {
+                "id": f"{request.job_id}_skills",
+                "vector": embeddings["skills_vector"],
+                "payload": {
+                    "job_id": request.job_id,
+                    "type": "skills",
+                    "skills": expanded_skills,
+                    "created_at": datetime.utcnow().isoformat()
+                }
+            }
+        ]
+
+        await vector_store.upsert_points(
+            points=points,
+            collection_name="jobs_v1"  # Separate collection!
+        )
+
+        logger.info(f"   Stored 2 points in jobs_v1 collection")
+
+        # ════════════════════════════════════════════════════════
+        # STEP 4: Cache in Redis (1 hour TTL)
+        # ════════════════════════════════════════════════════════
+        await redis_client.set(
+            f"job_embeddings:{request.job_id}",
+            json.dumps({
+                "profile_vector": embeddings["profile_vector"],
+                "skills_vector": embeddings["skills_vector"]
+            }),
+            ex=3600  # 1 hour TTL
+        )
+
+        logger.info(f"✅ Job embeddings created and cached for {request.job_id}")
+
+        # ════════════════════════════════════════════════════════
+        # STEP 5: Return response
+        # ════════════════════════════════════════════════════════
+        return {
+            "status": "success",
+            "job_id": request.job_id,
+            "embeddings_created": True,
+            "cached": True,
+            "profile_text": embeddings["profile_text"][:100] + "...",
+            "skills_count": len(expanded_skills)
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Error in job_ingestion_webhook: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create job embeddings: {str(e)}"
+        )

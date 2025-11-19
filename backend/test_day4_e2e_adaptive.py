@@ -121,6 +121,29 @@ async def test_day4_pipeline():
         print(f"✅ Job created: {job_id}")
         print(f"   Title: {job_config['title']}")
 
+        # Step 2.5: Create applications for all candidates
+        print(f"\n2️⃣.5 Creating applications for all candidates...")
+        async with AsyncSessionLocal() as db:
+            # Get all candidates
+            result = await db.execute(select(Candidate))
+            candidates = result.scalars().all()
+
+            # Create applications
+            from app.models.candidate import Application, ApplicationStatus
+            applications_created = 0
+
+            for candidate in candidates:
+                application = Application(
+                    candidate_id=candidate.id,
+                    job_id=job_id,
+                    status=ApplicationStatus.applied
+                )
+                db.add(application)
+                applications_created += 1
+
+            await db.commit()
+            print(f"✅ Created {applications_created} applications")
+
         # Step 3: Test Day-3 SQL gating
         print(f"\n3️⃣ Testing SQL gating (Day-3 baseline)...")
         response = await client.post(

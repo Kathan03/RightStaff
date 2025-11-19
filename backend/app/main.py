@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 from datetime import datetime
 
-from app.api import webhooks, jobs, admin  # NEW: jobs, admin routers (Day 3)
+from app.api import webhooks, jobs, admin, candidates, chat  # NEW: jobs, admin routers (Day 3), candidates (Day 5), chat (Day 6)
 from app.services.ingestion import ingestion_worker
 from app.utils.logging import logger
 from decimal import Decimal
@@ -43,10 +43,16 @@ app.add_middleware(
 app.include_router(webhooks.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])  # NEW: Day 3
 app.include_router(admin.router, prefix="/api/v1", tags=["admin"])  # NEW: Day 3
+app.include_router(candidates.router, prefix="/api/v1/candidates", tags=["candidates"])  # NEW: Day 5
+app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])  # NEW: Day 6
 
 @app.on_event("startup")
 async def startup_event():
     """Start background worker when FastAPI starts."""
+    # Initialize Qdrant collections (candidates_v1 and jobs_v1)
+    from app.services.vector_store import vector_store
+    vector_store.initialize_collections()
+
     asyncio.create_task(ingestion_worker.start())
     logger.info("FastAPI app started with background worker")
 

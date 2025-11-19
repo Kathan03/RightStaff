@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from app.database import AsyncSessionLocal
-from app.models.candidate import Candidate, CandidateContact, CandidateResume, Skill, CandidateSkill
+from app.models.candidate import Candidate, CandidateContact, CandidateResume, Skill, CandidateSkill, Job, Application, ApplicationStatus, JobStatus
 from app.services.embeddings import embedding_service
 from app.services.vector_store import vector_store
 from app.services.s3_client import s3_client
@@ -16,6 +16,151 @@ from app.services.s3_client import s3_client
 # Force UTF-8 encoding for console output
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding='utf-8')
+
+
+# Dummy jobs with diverse requirements
+DUMMY_JOBS = [
+    {
+        "title": "Senior Python Engineer",
+        "description": """We're looking for an experienced Python engineer to join our backend team.
+        You'll be building scalable microservices using FastAPI, working with PostgreSQL databases,
+        and deploying to AWS cloud infrastructure. Experience with Docker and CI/CD pipelines is essential.
+
+        Responsibilities:
+        - Design and implement RESTful APIs using FastAPI
+        - Optimize database queries and schema design
+        - Build containerized applications with Docker
+        - Collaborate with frontend team on API contracts
+        - Mentor junior developers
+
+        Our tech stack: Python, FastAPI, PostgreSQL, Redis, Docker, AWS, React""",
+        "department": "Engineering",
+        "location": "San Francisco, CA (Hybrid)",
+        "status": JobStatus.open,
+        "required_skills_json": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS", "REST APIs"],
+        "must_have_skills_json": ["Python", "PostgreSQL"],
+        "min_years_experience": 5.0,
+        "max_years_experience": 10.0,
+        "work_arrangement": "hybrid",
+        "employment_type": "full-time"
+    },
+    {
+        "title": "Full-Stack Engineer (React + Python)",
+        "description": """Join our product team as a full-stack engineer working on customer-facing features.
+        You'll build responsive UIs with React/TypeScript and backend services with Python.
+
+        Key Responsibilities:
+        - Develop modern React applications with TypeScript
+        - Build RESTful APIs with Python (FastAPI/Django)
+        - Implement real-time features using WebSockets
+        - Write comprehensive tests (Jest, Pytest)
+        - Participate in code reviews and architecture discussions
+
+        Tech Stack: React, TypeScript, Python, FastAPI, PostgreSQL, Redis, AWS""",
+        "department": "Product Engineering",
+        "location": "Remote (US Only)",
+        "status": JobStatus.open,
+        "required_skills_json": ["React", "TypeScript", "Python", "FastAPI", "PostgreSQL"],
+        "must_have_skills_json": ["React", "Python"],
+        "min_years_experience": 3.0,
+        "max_years_experience": 8.0,
+        "work_arrangement": "remote",
+        "employment_type": "full-time"
+    },
+    {
+        "title": "Data Engineer - Big Data Platform",
+        "description": """Build and maintain our data infrastructure handling billions of events daily.
+        Work with modern big data technologies including Spark, Kafka, and cloud data warehouses.
+
+        What You'll Do:
+        - Design and implement data pipelines using Apache Spark
+        - Build real-time streaming applications with Kafka
+        - Optimize data warehouse performance (Snowflake/Redshift)
+        - Develop ETL processes in Python/Scala
+        - Monitor and troubleshoot data quality issues
+
+        Technologies: Python, Spark, Kafka, SQL, AWS, Airflow, Snowflake""",
+        "department": "Data Platform",
+        "location": "Austin, TX (Hybrid)",
+        "status": JobStatus.open,
+        "required_skills_json": ["Python", "Spark", "Kafka", "SQL", "AWS", "ETL"],
+        "must_have_skills_json": ["Python", "Spark", "SQL"],
+        "min_years_experience": 4.0,
+        "max_years_experience": 12.0,
+        "work_arrangement": "hybrid",
+        "employment_type": "full-time"
+    },
+    {
+        "title": "Java Backend Engineer - Microservices",
+        "description": """Looking for a Java expert to work on our microservices architecture.
+        You'll design distributed systems using Spring Boot, implement event-driven patterns,
+        and ensure high availability and scalability.
+
+        Responsibilities:
+        - Build microservices with Spring Boot and Spring Cloud
+        - Design event-driven architectures using Kafka
+        - Implement API gateways and service mesh
+        - Optimize performance and troubleshoot production issues
+        - Lead technical design discussions
+
+        Stack: Java, Spring Boot, Kafka, PostgreSQL, Redis, Kubernetes, AWS""",
+        "department": "Platform Engineering",
+        "location": "Seattle, WA (Onsite)",
+        "status": JobStatus.open,
+        "required_skills_json": ["Java", "Spring Boot", "Microservices", "Kafka", "Kubernetes"],
+        "must_have_skills_json": ["Java", "Spring Boot"],
+        "min_years_experience": 5.0,
+        "max_years_experience": 10.0,
+        "work_arrangement": "onsite",
+        "employment_type": "full-time"
+    },
+    {
+        "title": "DevOps Engineer - Cloud Infrastructure",
+        "description": """Manage and scale our cloud infrastructure on AWS. Build automation tools,
+        implement CI/CD pipelines, and ensure system reliability.
+
+        Key Duties:
+        - Manage AWS infrastructure (EC2, RDS, S3, Lambda)
+        - Build CI/CD pipelines with GitHub Actions
+        - Implement Infrastructure as Code (Terraform)
+        - Set up monitoring and alerting (Datadog, CloudWatch)
+        - Troubleshoot production incidents
+
+        Required Skills: AWS, Docker, Kubernetes, Terraform, Python, Linux""",
+        "department": "Infrastructure",
+        "location": "Remote (Global)",
+        "status": JobStatus.open,
+        "required_skills_json": ["AWS", "Docker", "Kubernetes", "Terraform", "Python", "Linux"],
+        "must_have_skills_json": ["AWS", "Docker"],
+        "min_years_experience": 3.0,
+        "max_years_experience": 8.0,
+        "work_arrangement": "remote",
+        "employment_type": "full-time"
+    },
+    {
+        "title": "Machine Learning Engineer",
+        "description": """Build and deploy ML models for our recommendation and ranking systems.
+        Work with large-scale datasets and implement production ML pipelines.
+
+        What You'll Work On:
+        - Develop ML models using PyTorch/TensorFlow
+        - Build feature engineering pipelines
+        - Deploy models to production using MLflow/Kubeflow
+        - A/B test model improvements
+        - Collaborate with data scientists on research
+
+        Tech Stack: Python, PyTorch, Scikit-learn, Spark, AWS, Docker""",
+        "department": "Machine Learning",
+        "location": "San Francisco, CA (Hybrid)",
+        "status": JobStatus.open,
+        "required_skills_json": ["Python", "Machine Learning", "PyTorch", "AWS", "Docker"],
+        "must_have_skills_json": ["Python", "Machine Learning"],
+        "min_years_experience": 3.0,
+        "max_years_experience": 7.0,
+        "work_arrangement": "hybrid",
+        "employment_type": "full-time"
+    }
+]
 
 
 # Dummy candidates with diverse profiles
@@ -195,8 +340,70 @@ DUMMY_CANDIDATES = [
 ]
 
 
+async def create_jobs(db):
+    """Create job postings in database (skip if already exists)."""
+
+    print("\n" + "="*60)
+    print("CREATING JOBS")
+    print("="*60)
+
+    # Check which jobs already exist (by title)
+    existing_jobs_result = await db.execute(select(Job))
+    existing_jobs = existing_jobs_result.scalars().all()
+    existing_job_titles = {job.title for job in existing_jobs}
+
+    job_objects = list(existing_jobs)  # Start with existing jobs
+    new_jobs_count = 0
+
+    for job_data in DUMMY_JOBS:
+        if job_data["title"] in existing_job_titles:
+            print(f"   ℹ️  Skipped existing job: {job_data['title']}")
+            continue
+
+        try:
+            # Create job
+            job = Job(
+                title=job_data["title"],
+                description=job_data["description"],
+                department=job_data["department"],
+                location=job_data["location"],
+                status=job_data["status"],
+                required_skills_json=job_data["required_skills_json"],
+                must_have_skills_json=job_data["must_have_skills_json"],
+                min_years_experience=job_data["min_years_experience"],
+                max_years_experience=job_data["max_years_experience"],
+                work_arrangement=job_data["work_arrangement"],
+                employment_type=job_data["employment_type"]
+            )
+
+            db.add(job)
+            job_objects.append(job)
+            new_jobs_count += 1
+
+        except Exception as e:
+            print(f"   ⚠️  Error creating job '{job_data['title']}': {e}")
+            continue
+
+    if new_jobs_count > 0:
+        await db.commit()
+
+        # Refresh to get IDs for new jobs
+        for job in job_objects:
+            await db.refresh(job)
+
+        print(f"✅ Created {new_jobs_count} new jobs:")
+        for job in job_objects[-new_jobs_count:]:  # Only show new jobs
+            print(f"   • {job.title} ({job.location})")
+    else:
+        print(f"   ℹ️  No new jobs to create (all {len(existing_job_titles)} jobs already exist)")
+
+    print(f"   📊 Total jobs available: {len(job_objects)}")
+
+    return job_objects
+
+
 async def create_skills(db):
-    """Create skill ontology."""
+    """Create skill ontology (skip if already exists)."""
 
     print("\n1️⃣ Creating skills ontology...")
 
@@ -218,27 +425,57 @@ async def create_skills(db):
         "System Design", "Microservices", "REST API", "GraphQL", "Git"
     ]
 
-    skill_objects = {}
-    for skill_name in skills:
-        skill_id = uuid.uuid4()
-        skill = Skill(id=skill_id, name=skill_name, parent_skill_id=None)
-        db.add(skill)
-        skill_objects[skill_name] = skill
+    # Check which skills already exist
+    existing_skills_result = await db.execute(select(Skill))
+    existing_skills = existing_skills_result.scalars().all()
+    existing_skill_names = {skill.name for skill in existing_skills}
 
-    await db.flush()
-    print(f"   ✅ Created {len(skills)} skills")
+    skill_objects = {}
+
+    # Add existing skills to skill_objects
+    for skill in existing_skills:
+        skill_objects[skill.name] = skill
+
+    # Only create skills that don't exist yet
+    new_skills_count = 0
+    for skill_name in skills:
+        if skill_name not in existing_skill_names:
+            skill_id = uuid.uuid4()
+            skill = Skill(id=skill_id, name=skill_name, parent_skill_id=None)
+            db.add(skill)
+            skill_objects[skill_name] = skill
+            new_skills_count += 1
+
+    if new_skills_count > 0:
+        await db.flush()
+        print(f"   ✅ Created {new_skills_count} new skills")
+
+    if len(existing_skill_names) > 0:
+        print(f"   ℹ️  Skipped {len(existing_skill_names)} existing skills")
+
+    print(f"   📊 Total skills available: {len(skill_objects)}")
 
     return skill_objects
 
 
 async def create_candidates(db, skill_objects):
-    """Create dummy candidates with full profiles."""
+    """Create dummy candidates with full profiles (skip if already exists)."""
 
     print("\n2️⃣ Creating candidates...")
 
+    # Check which candidates already exist (by full_name)
+    existing_candidates_result = await db.execute(select(Candidate))
+    existing_candidates = existing_candidates_result.scalars().all()
+    existing_candidate_names = {c.full_name for c in existing_candidates}
+
     candidate_ids = []
+    new_candidates_count = 0
 
     for i, cand_data in enumerate(DUMMY_CANDIDATES, 1):
+        if cand_data["full_name"] in existing_candidate_names:
+            print(f"   ℹ️  {i}/{len(DUMMY_CANDIDATES)}: {cand_data['full_name']} (already exists)")
+            continue
+
         # Create candidate
         candidate_id = uuid.uuid4()
         candidate = Candidate(
@@ -277,9 +514,16 @@ async def create_candidates(db, skill_objects):
                 db.add(candidate_skill)
 
         print(f"   ✅ {i}/{len(DUMMY_CANDIDATES)}: {cand_data['full_name']}")
+        new_candidates_count += 1
 
-    await db.commit()
-    print(f"   ✅ Created {len(DUMMY_CANDIDATES)} candidates with full profiles")
+    if new_candidates_count > 0:
+        await db.commit()
+        print(f"   ✅ Created {new_candidates_count} new candidates with full profiles")
+
+    if len(existing_candidate_names) > 0:
+        print(f"   ℹ️  Skipped {len(existing_candidate_names)} existing candidates")
+
+    print(f"   📊 Total candidates available: {new_candidates_count + len(existing_candidate_names)}")
 
     return candidate_ids
 
@@ -367,7 +611,7 @@ async def populate_qdrant(db):
 
 
 async def populate_minio(db):
-    """Upload resume files to MinIO for candidates."""
+    """Upload resume files to MinIO for candidates (skip if already exists)."""
 
     print("\n4️⃣ Uploading resumes to MinIO...")
 
@@ -398,11 +642,22 @@ async def populate_minio(db):
     )
     candidates = result.all()
 
+    # Check which candidates already have resumes
+    existing_resumes_result = await db.execute(select(CandidateResume.candidate_id))
+    existing_resume_candidate_ids = {r[0] for r in existing_resumes_result.all()}
+
     uploaded_count = 0
     skipped_count = 0
+    existing_count = 0
 
     for i, (cand_id, name) in enumerate(candidates, 1):
         try:
+            # Check if resume already exists
+            if cand_id in existing_resume_candidate_ids:
+                print(f"   ℹ️  {i}/{len(candidates)}: {name} (resume already exists)")
+                existing_count += 1
+                continue
+
             # Check if this candidate has a resume
             if name not in resume_mapping:
                 print(f"   ⏭️  {i}/{len(candidates)}: {name} (no resume - for testing)")
@@ -445,11 +700,138 @@ async def populate_minio(db):
         except Exception as e:
             print(f"   ❌ {i}/{len(candidates)}: {name} - Error: {e}")
 
-    await db.commit()
+    if uploaded_count > 0:
+        await db.commit()
 
     print(f"\n   Summary:")
-    print(f"   • Uploaded: {uploaded_count} resumes")
+    print(f"   • Uploaded: {uploaded_count} new resumes")
+    print(f"   • Existing: {existing_count} resumes already uploaded")
     print(f"   • Skipped: {skipped_count} candidates (for testing)")
+
+
+async def create_job_embeddings(db):
+    """Generate and store embeddings for all jobs."""
+
+    print("\n" + "="*60)
+    print("CREATING JOB EMBEDDINGS")
+    print("="*60)
+
+    from app.services.job_embeddings import generate_job_embeddings
+
+    # Get all jobs
+    jobs_result = await db.execute(select(Job))
+    jobs = jobs_result.scalars().all()
+
+    if not jobs:
+        print("⚠️  No jobs found - skipping job embeddings")
+        return
+
+    embeddings_created = 0
+
+    for job in jobs:
+        try:
+            # Generate embeddings
+            embeddings = await generate_job_embeddings(
+                job_id=str(job.id),
+                title=job.title,
+                description=job.description or "",
+                required_skills=job.required_skills_json or []
+            )
+
+            # Store in Qdrant jobs_v1 collection
+            points = [
+                {
+                    "id": f"{job.id}_profile",
+                    "vector": embeddings["profile_vector"],
+                    "payload": {
+                        "job_id": str(job.id),
+                        "type": "profile",
+                        "title": job.title,
+                        "created_at": datetime.utcnow().isoformat()
+                    }
+                },
+                {
+                    "id": f"{job.id}_skills",
+                    "vector": embeddings["skills_vector"],
+                    "payload": {
+                        "job_id": str(job.id),
+                        "type": "skills",
+                        "skills": job.required_skills_json or [],
+                        "created_at": datetime.utcnow().isoformat()
+                    }
+                }
+            ]
+
+            await vector_store.upsert_points(points, collection_name="jobs_v1")
+            embeddings_created += 1
+
+            print(f"  ✅ {job.title}: embeddings created")
+
+        except Exception as e:
+            print(f"  ⚠️  {job.title}: failed - {e}")
+            continue
+
+    print(f"✅ Created embeddings for {embeddings_created}/{len(jobs)} jobs")
+
+
+async def create_applications(db):
+    """Create job applications for testing (skip if already exists)."""
+
+    print("\n" + "="*60)
+    print("CREATING JOB APPLICATIONS")
+    print("="*60)
+
+    # Get first 3 jobs and first 10 candidates for demo
+    jobs_result = await db.execute(select(Job).limit(3))
+    jobs = jobs_result.scalars().all()
+
+    candidates_result = await db.execute(select(Candidate).limit(10))
+    candidates = candidates_result.scalars().all()
+
+    if not jobs:
+        print("⚠️  No jobs found - skipping application creation")
+        return
+    elif not candidates:
+        print("⚠️  No candidates found - skipping application creation")
+        return
+
+    # Get existing applications to avoid duplicates
+    existing_applications_result = await db.execute(select(Application))
+    existing_applications = existing_applications_result.scalars().all()
+    existing_pairs = {(app.candidate_id, app.job_id) for app in existing_applications}
+
+    applications_created = 0
+    applications_skipped = 0
+
+    # Create applications: first 10 candidates apply to first 3 jobs
+    for job in jobs:
+        for candidate in candidates:
+            try:
+                # Check if application already exists
+                if (candidate.id, job.id) in existing_pairs:
+                    applications_skipped += 1
+                    continue
+
+                # Create application
+                application = Application(
+                    candidate_id=candidate.id,
+                    job_id=job.id,
+                    status=ApplicationStatus.applied
+                )
+                db.add(application)
+                applications_created += 1
+            except Exception as e:
+                print(f"⚠️  Failed to create application: {e}")
+                continue
+
+    if applications_created > 0:
+        await db.commit()
+
+    print(f"✅ Applications summary:")
+    print(f"   • Created: {applications_created} new applications")
+    print(f"   • Skipped: {applications_skipped} existing applications")
+    print(f"   • Total jobs: {len(jobs)}")
+    print(f"   • Total candidates: {len(candidates)}")
 
 
 async def populate_all():
@@ -460,6 +842,9 @@ async def populate_all():
     print("="*70)
 
     async with AsyncSessionLocal() as db:
+        # Create jobs
+        job_objects = await create_jobs(db)
+
         # Create skills
         skill_objects = await create_skills(db)
 
@@ -472,14 +857,22 @@ async def populate_all():
         # Populate MinIO
         await populate_minio(db)
 
+        # Create job embeddings
+        await create_job_embeddings(db)
+
+        # Create applications
+        await create_applications(db)
+
     # Summary
     print("\n" + "="*70)
     print("✅ Dummy data populated successfully!")
     print("="*70)
     print(f"\n📊 Summary:")
+    print(f"   • Jobs: {len(job_objects)}")
     print(f"   • Candidates: {len(DUMMY_CANDIDATES)}")
     print(f"   • Skills: {len(skill_objects)}")
-    print(f"   • Vectors in Qdrant: {len(DUMMY_CANDIDATES)}")
+    print(f"   • Candidate Vectors in Qdrant: {len(DUMMY_CANDIDATES)}")
+    print(f"   • Job Embeddings in Qdrant: {len(job_objects) * 2} (profile + skills)")
     print(f"   • Resumes in MinIO: 5 (3 candidates without resumes for testing)")
     print("\n💡 Next steps:")
     print("   1. Check data: python check_database.py")

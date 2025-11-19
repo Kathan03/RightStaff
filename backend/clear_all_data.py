@@ -29,6 +29,7 @@ async def clear_postgresql():
                 'rightstaff.candidate_education',
                 'rightstaff.candidate_experience',
                 'rightstaff.candidate_resume',
+                'rightstaff.application',  # Delete applications before candidates/jobs
                 'rightstaff.candidate',
                 'rightstaff.job',
                 'rightstaff.skill'
@@ -84,26 +85,35 @@ async def clear_minio():
 
 
 async def clear_qdrant():
-    """Clear all vectors from Qdrant collection."""
+    """Clear all vectors from Qdrant collections."""
 
-    print("\n Clearing Qdrant collection...")
+    print("\n3️⃣ Clearing Qdrant collections...")
 
     try:
-        # Get collection info
-        info = vector_store.get_collection_info()
-        vector_count = info.get('vectors_count', 0)
-        print(f"   Current vectors: {vector_count}")
+        # Clear candidates_v1 collection
+        try:
+            info = vector_store.get_collection_info()
+            vector_count = info.get('vectors_count', 0)
+            print(f"   Current vectors in candidates_v1: {vector_count}")
 
-        # Delete collection and recreate
-        vector_store.client.delete_collection(vector_store.collection_name)
-        print(f"   ✅ Deleted collection: {vector_store.collection_name}")
+            vector_store.client.delete_collection(vector_store.collection_name)
+            print(f"   ✅ Deleted collection: {vector_store.collection_name}")
+        except Exception as e:
+            print(f"   ⚠️  Could not delete candidates_v1: {e}")
 
-        # Recreate collection
-        vector_store.create_collection(vector_size=384)
-        print(f"   ✅ Recreated empty collection")
+        # Clear jobs_v1 collection
+        try:
+            vector_store.client.delete_collection(vector_store.jobs_collection_name)
+            print(f"   ✅ Deleted collection: {vector_store.jobs_collection_name}")
+        except Exception as e:
+            print(f"   ⚠️  Could not delete jobs_v1: {e}")
+
+        # Recreate both collections
+        vector_store.initialize_collections()
+        print(f"   ✅ Recreated both collections")
 
     except Exception as e:
-        print(f"   ⚠️  Error clearing collection: {e}")
+        print(f"   ⚠️  Error clearing Qdrant: {e}")
 
 
 async def clear_redis():

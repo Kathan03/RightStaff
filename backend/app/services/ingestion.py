@@ -1,19 +1,22 @@
 """
 Background worker that processes ingestion jobs from Redis queue.
-Flow: Poll Redis → Fetch candidate → Download resume → Parse → Chunk → Embed → Store in Qdrant
+Flow: Poll Redis → Fetch candidate → Download resume → Parse → Extract skills → Store skills in PostgreSQL → Chunk → Embed → Store in Qdrant
 
 DAY 3 ADDITIONS:
 - Retry logic with exponential backoff
 - Dead Letter Queue for failed jobs after max retries
 - Skills extraction from resume text
 - Structured metrics collection
+
+DAY 5+ ADDITIONS:
+- Store extracted skills in PostgreSQL for SQL gating
 """
 import asyncio
 import json
 from datetime import datetime
 from typing import Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text, delete
 from sqlalchemy.orm import selectinload
 
 # NEW: Retry logic imports
@@ -169,34 +172,107 @@ class IngestionWorker:
     
     async def process_job(self, job_data: dict):
         """
-        Process a single ingestion job - THE COMPLETE PIPELINE.
-        
-        Pipeline stages (Day 3 - 7 stages):
+        Process a single ingestion job.
+
+        MODES:
+        - parse_only: Extract text and fields only (Stage 1 - Resume Upload)
+        - full: Complete 8-stage pipeline with embeddings (Stage 3 - Candidate Creation)
+
+        Pipeline stages (full mode):
         1. Fetch candidate details from PostgreSQL
         2. Download resume from MinIO
         3. Parse resume (extract text)
-        4. Extract skills from text (NEW: Day 3)
+        4. Extract skills from text
+        4.5. Store skills in PostgreSQL (for SQL gating)
         5. Chunk text (split into semantic units)
         6. Generate embeddings (convert to vectors)
         7. Store in Qdrant (save vectors + metadata with skills)
-        
+
         Error handling:
         - Transient errors → retry with exponential backoff (tenacity)
         - Permanent errors → fail immediately, move to DLQ
-        
+
         Args:
             job_data: Job metadata from Redis queue
         """
         start_time = datetime.utcnow()
+        candidate_id = job_data["candidate_id"]
+        s3_url = job_data["s3_resume_url"]
+        mode = job_data.get("mode", "full")  # Default to full for backward compatibility
+
+        logger.info(f"🚀 Starting ingestion for {candidate_id} (mode: {mode})")
+
+        # ══════════════════════════════════════════════════════════════
+        # MODE: PARSE_ONLY (Stage 1 - Resume Upload)
+        # ══════════════════════════════════════════════════════════════
+        if mode == "parse_only":
+            try:
+                # Download resume from MinIO
+                logger.info(f"[parse_only] Downloading resume from {s3_url}")
+                resume_bytes = await s3_client.download_file(s3_url)
+                logger.info(f"📥 Downloaded resume from {s3_url}")
+
+                # Parse text from resume
+                from app.services.parsers import parse_resume_text
+
+                # Extract file extension from s3_url
+                file_ext = s3_url.split('.')[-1] if '.' in s3_url else 'pdf'
+                file_type = f".{file_ext}"
+
+                text = await parse_resume_text(resume_bytes, file_type)
+                logger.info(f"📄 Parsed resume text ({len(text)} chars)")
+
+                # Extract fields
+                from app.services.parsers import (
+                    extract_name,
+                    extract_email,
+                    extract_phone,
+                    extract_location,
+                    calculate_years_experience
+                )
+
+                # Extract skills using ontology service
+                extracted_skills = await extract_skills_from_text(text)
+
+                parsed_data = {
+                    "full_name": extract_name(text) or "Unknown",
+                    "email": extract_email(text),
+                    "phone": extract_phone(text),
+                    "skills": extracted_skills,
+                    "years_experience": calculate_years_experience(text),
+                    "location": extract_location(text),
+                    "professional_summary": text[:500],  # First 500 chars
+                    "s3_resume_url": s3_url  # Store s3_url for later use
+                }
+
+                # Cache in Redis with 1-hour TTL
+                await redis_client.set(
+                    f"parsed_candidate:{candidate_id}",
+                    json.dumps(parsed_data),
+                    ex=3600  # 1 hour
+                )
+
+                logger.info(f"✅ Parse-only complete for {candidate_id}")
+                logger.info(f"   Name: {parsed_data['full_name']}")
+                logger.info(f"   Email: {parsed_data['email']}")
+                logger.info(f"   Skills: {len(parsed_data['skills'])} found")
+
+                return  # STOP HERE - no embeddings, no Qdrant, no PostgreSQL!
+
+            except Exception as e:
+                logger.error(f"❌ Parse-only failed for {candidate_id}: {e}")
+                raise
+
+        # ══════════════════════════════════════════════════════════════
+        # MODE: FULL (Stage 3 - Complete 7-Stage Pipeline)
+        # ══════════════════════════════════════════════════════════════
         async with AsyncSessionLocal() as db:
             try:
-                candidate_id = job_data["candidate_id"]
-                s3_url = job_data["s3_resume_url"]
                 retry_count = job_data.get("retry_count", 0)
-                
+
                 if retry_count > 0:
                     logger.warning(f"⚠️  Retry attempt for job {job_data['job_id']}")
-                
+
                 # ========================================
                 # STAGE 1: Fetch candidate details
                 # ========================================
@@ -256,12 +332,92 @@ class IngestionWorker:
                 
                 logger.info(f"✅ Extracted {len(extracted_skills)} skills: {', '.join(extracted_skills[:5])}{'...' if len(extracted_skills) > 5 else ''}")
                 metrics_collector.record_timing("ingestion_stage_4_skills", stage_start)
-                
+
+                # ========================================
+                # STAGE 4.5: Store skills in PostgreSQL
+                # ========================================
+                stage_start = datetime.utcnow()
+                logger.info(f"[4.5/7] Storing skills in PostgreSQL")
+
+                from app.models.candidate import Skill, CandidateSkill
+
+                # Delete existing skills for this candidate (idempotent re-indexing)
+                await db.execute(
+                    delete(CandidateSkill).where(CandidateSkill.candidate_id == candidate_id)
+                )
+
+                # For each extracted skill, find or create in skill table
+                skills_created = 0
+                skills_linked = 0
+
+                for skill_name in extracted_skills:
+                    # Find existing skill
+                    result = await db.execute(
+                        select(Skill).where(Skill.name == skill_name)
+                    )
+                    skill = result.scalar_one_or_none()
+
+                    # Create skill if it doesn't exist
+                    if not skill:
+                        skill = Skill(name=skill_name)
+                        db.add(skill)
+                        await db.flush()  # Get skill.id
+                        skills_created += 1
+                        logger.debug(f"Created new skill: {skill_name}")
+
+                    # Link candidate to skill
+                    candidate_skill = CandidateSkill(
+                        candidate_id=candidate_id,
+                        skill_id=skill.id,
+                        level=None,  # Not extracted yet
+                        years=None   # Not extracted yet
+                    )
+                    db.add(candidate_skill)
+                    skills_linked += 1
+
+                await db.commit()
+
+                logger.info(f"✅ Stored {skills_linked} skills in PostgreSQL ({skills_created} new skills created)")
+                metrics_collector.record_timing("ingestion_stage_4.5_store_skills", stage_start)
+
+                # ========================================
+                # STAGE 4.6: Store resume record in PostgreSQL
+                # ========================================
+                stage_start = datetime.utcnow()
+                logger.info(f"[4.6/8] Storing resume record in PostgreSQL")
+
+                from app.models.candidate import CandidateResume
+
+                # Extract file extension from s3_url
+                file_ext = None
+                if '.' in s3_url:
+                    file_ext = '.' + s3_url.split('.')[-1].lower()
+
+                # Mark all previous resumes as not latest
+                await db.execute(
+                    text("UPDATE rightstaff.candidate_resume SET is_latest = false WHERE candidate_id = :cid"),
+                    {"cid": str(candidate_id)}
+                )
+
+                # Create new resume record
+                resume_record = CandidateResume(
+                    candidate_id=candidate_id,
+                    s3_url=s3_url,
+                    file_type=file_ext,
+                    is_latest=True,
+                    uploaded_at=datetime.utcnow()
+                )
+                db.add(resume_record)
+                await db.commit()
+
+                logger.info(f"✅ Stored resume record: {s3_url} (type: {file_ext})")
+                metrics_collector.record_timing("ingestion_stage_4.6_store_resume", stage_start)
+
                 # ========================================
                 # STAGE 5: Chunk text
                 # ========================================
                 stage_start = datetime.utcnow()
-                logger.info(f"[5/7] Chunking text (size=400, overlap=50)")
+                logger.info(f"[5/8] Chunking text (size=400, overlap=50)")
                 
                 chunks = chunk_text(
                     text,
@@ -280,7 +436,7 @@ class IngestionWorker:
                 # STAGE 6: Generate embeddings (profile, skills, chunks)
                 # ========================================
                 stage_start = datetime.utcnow()
-                logger.info(f"[6/7] Generating embeddings (1 profile + 1 skills + {len(chunks)} chunks)")
+                logger.info(f"[6/8] Generating embeddings (1 profile + 1 skills + {len(chunks)} chunks)")
 
                 # 6a. Generate profile embedding (full resume summary)
                 profile_text = f"{candidate.full_name}\n{text[:1000]}"  # Use first 1000 chars as profile
@@ -301,7 +457,7 @@ class IngestionWorker:
                 # STAGE 7: Store in Qdrant (profile + skills + chunks)
                 # ========================================
                 stage_start = datetime.utcnow()
-                logger.info(f"[7/7] Storing vectors in Qdrant")
+                logger.info(f"[7/8] Storing vectors in Qdrant")
 
                 # Delete old vectors first (idempotent re-indexing)
                 logger.info(f"Deleting old vectors for candidate {candidate_id} (if any)")

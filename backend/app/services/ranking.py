@@ -18,7 +18,7 @@ from app.services.explanation import explanation_generator
 from app.services.redis_client import redis_client
 from app.utils.logging import logger
 from app.database import AsyncSessionLocal
-from app.models.candidate import Job, Candidate, CandidateContact, CandidateSkill, Skill
+from app.models.candidate import Job, Candidate, CandidateContact, CandidateSkill, Skill, Application
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -51,10 +51,10 @@ class RankingService:
 
     # Final score weights from PRD
     WEIGHTS = {
-        'dense': 0.40,
-        'structured': 0.35,
-        'pairwise': 0.00,  # Day 10 - cross-encoder
-        'completeness': 0.25
+        'dense': 0.30,        # Reduced from 0.40
+        'structured': 0.30,   # Reduced from 0.35
+        'pairwise': 0.25,     # NEW! Cross-encoder score
+        'completeness': 0.15  # Reduced from 0.25
     }
 
     def __init__(self):
@@ -92,14 +92,34 @@ class RankingService:
         # Step 1: Get job data
         job_data = await self._fetch_job_data(job_id)
 
-        # Step 2: SQL gating
+        # ════════════════════════════════════════════════════════════════
+        # Step 2a: Get candidates who applied to this job
+        # ════════════════════════════════════════════════════════════════
+        async with AsyncSessionLocal() as db:
+            application_result = await db.execute(
+                select(Application.candidate_id)
+                .where(Application.job_id == job_id)
+            )
+            applied_candidate_ids = [str(row[0]) for row in application_result.all()]
+
+        # Early exit if no applications
+        if not applied_candidate_ids:
+            logger.warning(f"⚠️  No applications found for job {job_id}")
+            return []
+
+        logger.info(f"📋 {len(applied_candidate_ids)} candidates applied to job {job_id}")
+
+        # ════════════════════════════════════════════════════════════════
+        # Step 2b: Apply SQL gates ONLY on candidates who applied
+        # ════════════════════════════════════════════════════════════════
         eligible_candidate_ids = await apply_combined_sql_gates(
+            application_ids=applied_candidate_ids,  # NEW: Filter by applications first!
             must_have_skills=job_data.get('must_have_skills_json', []),
             min_years_experience=job_data.get('min_years_experience'),
             max_years_experience=job_data.get('max_years_experience'),
             preferred_location=job_data.get('location')
         )
-        logger.info(f"📊 {len(eligible_candidate_ids)} candidates passed SQL gates")
+        logger.info(f"📊 {len(eligible_candidate_ids)} applicants passed SQL gates")
 
         if not eligible_candidate_ids:
             return []
@@ -114,6 +134,43 @@ class RankingService:
             top_k=100
         )
 
+        # Step 3.5: Cross-encoder re-ranking (NEW!)
+        if len(retrieval_results) > 0:
+            from app.services.reranker import get_reranker
+
+            # Get candidate data for top 100 dense results
+            candidates_for_rerank = []
+            for result in retrieval_results[:100]:
+                candidate_data = next(
+                    (c for c in eligible_candidates if c['id'] == result.candidate_id),
+                    None
+                )
+                if candidate_data:
+                    candidates_for_rerank.append({
+                        'id': candidate_data['id'],
+                        'professional_summary': candidate_data.get('professional_summary', ''),
+                        **candidate_data  # Include all other fields
+                    })
+
+            # Re-rank using cross-encoder
+            reranker = get_reranker()
+            reranked = reranker.rerank(
+                job_description=job_data['description'],
+                candidates=candidates_for_rerank,
+                top_k=50
+            )
+
+            logger.info(f"🔄 Re-ranked {len(reranked)} candidates using cross-encoder")
+
+            # Update eligible_candidates with pairwise scores
+            pairwise_scores = {c['id']: c['pairwise_score'] for c in reranked}
+            for candidate in eligible_candidates:
+                candidate['pairwise_score'] = pairwise_scores.get(candidate['id'], 0.0)
+        else:
+            # No dense results, set pairwise to 0
+            for candidate in eligible_candidates:
+                candidate['pairwise_score'] = 0.0
+
         # Step 4: Structured scoring
         structured_scores = {}
         for candidate in eligible_candidates:
@@ -127,7 +184,8 @@ class RankingService:
         blended_results = self._blend_scores(
             retrieval_results,
             structured_scores,
-            completeness_scores
+            completeness_scores,
+            eligible_candidates  # NEW! Pass candidates with pairwise scores
         )
 
         # Step 7: Band candidates
@@ -166,13 +224,14 @@ class RankingService:
         self,
         retrieval_results,
         structured_scores,
-        completeness_scores
+        completeness_scores,
+        candidates: List[Dict] = None  # NEW! Candidates with pairwise scores
     ) -> List[Dict]:
         """
         Blend all scoring components.
 
-        Formula from PRD:
-        final = 0.40 * dense + 0.35 * structured + 0.25 * completeness
+        Formula (Updated):
+        final = 0.30 * dense + 0.30 * structured + 0.25 * pairwise + 0.15 * completeness
 
         IMPORTANT: Iterate over ALL candidates from structured_scores, not just
         those in retrieval_results. This ensures ranking works even when Qdrant
@@ -185,17 +244,25 @@ class RankingService:
         for retrieval in retrieval_results:
             dense_scores_map[retrieval.candidate_id] = retrieval.combined_score
 
+        # Build lookup dict for pairwise scores (NEW!)
+        pairwise_scores_map = {}
+        if candidates:
+            for candidate in candidates:
+                pairwise_scores_map[candidate['id']] = candidate.get('pairwise_score', 0.0)
+
         # Iterate over ALL candidates who passed SQL gating
         for candidate_id, structured in structured_scores.items():
             # Get all score components (use 0 if missing)
             dense_score = dense_scores_map.get(candidate_id, 0.0)
             structured_score = structured.combined_score if structured else 0.0
             completeness_score = completeness_scores.get(candidate_id, 0.5)
+            pairwise_score = pairwise_scores_map.get(candidate_id, 0.0)  # NEW!
 
             # Weighted combination
             final_score = (
                 self.WEIGHTS['dense'] * dense_score +
                 self.WEIGHTS['structured'] * structured_score +
+                self.WEIGHTS['pairwise'] * pairwise_score +  # NEW!
                 self.WEIGHTS['completeness'] * completeness_score
             )
 
@@ -205,6 +272,7 @@ class RankingService:
                 'scores': {
                     'dense': dense_score,
                     'structured': structured_score,
+                    'pairwise': pairwise_score,  # NEW!
                     'completeness': completeness_score
                 }
             })
