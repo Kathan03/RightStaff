@@ -1,115 +1,92 @@
 """
 WebSocket chatbot endpoint for RAG-powered Q&A.
-Job-scoped candidate assistant with streaming responses.
-
-TODO: Implement for Days 11-12 (MVP FEATURE - WebSocket + RAG)
+Job-scoped candidate assistant with streaming responses and EEOC guardrails.
 """
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from typing import List, Dict
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+from pydantic import BaseModel
 import logging
 import json
 
-from app.services.chatbot import chatbot
+from app.services.chatbot_langgraph import chatbot
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# ==================== WEBSOCKET ENDPOINT ====================
 
 @router.websocket("/{job_id}")
-async def chat_websocket(websocket: WebSocket, job_id: int):
+async def chat_websocket(websocket: WebSocket, job_id: str):
     """
-    WebSocket endpoint for job-scoped chatbot.
+    WebSocket endpoint for real-time chatbot interaction.
 
-    Protocol:
-    1. Client connects to /api/chat/{job_id}
-    2. Client sends: {"question": "Who has React experience?", "history": [...]}
-    3. Server streams response tokens
-    4. Server sends: {"type": "token", "content": "token"}
-    5. Server sends: {"type": "done", "citations": [...]}
+    Client sends:
+        {"question": "Who has Python?", "history": [...]}
 
-    Args:
-        websocket: WebSocket connection
-        job_id: Job ID (scope chatbot to this job's candidates)
-
-    TODO: Implement for Days 11-12
-    WebSocket flow:
-    1. Accept connection
-    2. Receive question from client
-    3. Call chatbot.stream_response()
-    4. Stream tokens back to client
-    5. Send citations when done
-    6. Handle disconnections gracefully
+    Server responds:
+        {"type": "response", "content": "...", "citations": [...]}
+        {"type": "error", "message": "..."}
     """
     await websocket.accept()
-    logger.info(f"WebSocket connected for job {job_id}")
+    logger.info(f"🔌 WebSocket connected: job {job_id}")
 
     try:
         while True:
-            # Receive message from client
+            # Receive message
             data = await websocket.receive_text()
             message = json.loads(data)
 
             question = message.get("question", "")
-            chat_history = message.get("history", [])
+            history = message.get("history", [])
 
-            logger.info(f"Received question for job {job_id}: {question}")
+            if not question:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Question is required"
+                })
+                continue
 
-            # TODO: Stream response using chatbot.stream_response()
-            # For now, send placeholder
-            await websocket.send_json({
-                "type": "token",
-                "content": "Chatbot not yet implemented. "
-            })
-            await websocket.send_json({
-                "type": "token",
-                "content": "This will be a RAG-powered assistant for candidate Q&A. "
-            })
-            await websocket.send_json({
-                "type": "token",
-                "content": "Coming in Days 11-12!"
-            })
-            await websocket.send_json({
-                "type": "done",
-                "citations": []
-            })
+            # Run chatbot
+            result = await chatbot.chat(job_id, question, history)
+
+            if result.get('error'):
+                await websocket.send_json({
+                    "type": "error",
+                    "message": result['error']
+                })
+            else:
+                await websocket.send_json({
+                    "type": "response",
+                    "content": result['response'],
+                    "citations": result['citations']
+                })
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for job {job_id}")
+        logger.info(f"🔌 WebSocket disconnected: job {job_id}")
     except Exception as e:
-        logger.error(f"WebSocket error for job {job_id}: {e}")
+        logger.error(f"❌ WebSocket error: {e}")
         await websocket.close()
 
 
+# ==================== EMAIL DRAFTING ENDPOINT ====================
+
+class EmailRequest(BaseModel):
+    email_type: str = "outreach"  # "outreach", "interview", "rejection"
+
 @router.post("/{job_id}/email/{candidate_id}")
-async def draft_candidate_email(
-    job_id: int,
-    candidate_id: str,
-    email_type: str = "outreach"
-):
+async def draft_email(job_id: str, candidate_id: str, request: EmailRequest):
     """
-    Draft personalized email to candidate.
+    Draft personalized email for candidate.
 
     Args:
-        job_id: Job ID
-        candidate_id: Candidate ID
-        email_type: Email type (outreach, interview, rejection)
-
-    Returns:
-        Generated email text
-
-    TODO: Implement for Days 11-12
+        job_id: Job UUID
+        candidate_id: Candidate UUID
+        email_type: Type of email to draft
     """
-    logger.info(f"Drafting {email_type} email for candidate {candidate_id}, job {job_id}")
-
-    # TODO: Call chatbot.draft_email()
-
-    return {
-        "job_id": job_id,
-        "candidate_id": candidate_id,
-        "email_type": email_type,
-        "status": "not_implemented",
-        "message": "Email drafting will be implemented in Days 11-12",
-        "email_content": ""
-    }
+    try:
+        email = await chatbot.draft_email(job_id, candidate_id, request.email_type)
+        return {"email": email}
+    except Exception as e:
+        logger.error(f"❌ Email draft error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
