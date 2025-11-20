@@ -5,15 +5,19 @@ import { Chatbot } from '../components/recruiter/Chatbot';
 import { jobsApi } from '../api/jobs';
 import { useRecruiterStore } from '../store/recruiterStore';
 import { Loading } from '../components/shared/Loading';
-import { Job } from '../types';
-import { AlertCircle, Sparkles, Plus, Briefcase, MapPin, Calendar, Users, ArrowLeft } from 'lucide-react';
+import { Job, Applicant } from '../types';
+import { AlertCircle, Sparkles, Plus, Briefcase, MapPin, Calendar, Users, ArrowLeft, Mail, Phone, Clock } from 'lucide-react';
 
 type View = 'list' | 'create' | 'detail';
+type DetailTab = 'rankings' | 'applicants';
 
 export const RecruiterDashboard: React.FC = () => {
   const [view, setView] = useState<View>('list');
+  const [detailTab, setDetailTab] = useState<DetailTab>('rankings');
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [applicants, setApplicants] = useState<Applicant[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(true);
+  const [loadingApplicants, setLoadingApplicants] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { selectedJobId, rankedCandidates, isLoading, setSelectedJobId, setRankedCandidates, setLoading } =
     useRecruiterStore();
@@ -40,12 +44,14 @@ export const RecruiterDashboard: React.FC = () => {
     setSelectedJobId(jobId);
     setView('detail');
     await loadRankings(jobId);
+    await loadApplicants(jobId);
   };
 
   const handleSelectJob = async (job: Job) => {
     setSelectedJobId(job.id);
     setView('detail');
     await loadRankings(job.id);
+    await loadApplicants(job.id);
   };
 
   const loadRankings = async (jobId: string) => {
@@ -63,6 +69,19 @@ export const RecruiterDashboard: React.FC = () => {
       setRankedCandidates([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadApplicants = async (jobId: string) => {
+    setLoadingApplicants(true);
+    try {
+      const response = await jobsApi.getApplicants(jobId);
+      setApplicants(response.applicants);
+    } catch (err) {
+      console.error('Failed to load applicants:', err);
+      setApplicants([]);
+    } finally {
+      setLoadingApplicants(false);
     }
   };
 
@@ -111,7 +130,7 @@ export const RecruiterDashboard: React.FC = () => {
                     ? 'Manage jobs and find the best candidates'
                     : view === 'create'
                     ? 'Post a new position to find candidates'
-                    : 'View rankings and chat with AI assistant'}
+                    : 'View rankings and applicants'}
                 </p>
               </div>
             </div>
@@ -222,7 +241,7 @@ export const RecruiterDashboard: React.FC = () => {
         {/* Create Job View */}
         {view === 'create' && <JobForm onSuccess={handleJobCreated} />}
 
-        {/* Job Detail View - Rankings & Chatbot */}
+        {/* Job Detail View - Rankings, Applicants & Chatbot */}
         {view === 'detail' && selectedJobId && (
           <>
             {error && (
@@ -240,38 +259,153 @@ export const RecruiterDashboard: React.FC = () => {
               </div>
             )}
 
-            {isLoading ? (
-              <div className="card">
-                <Loading message="Ranking candidates..." />
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Left: Rankings */}
-                <div>
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="w-5 h-5 text-primary-600" />
-                      <h2 className="text-xl font-bold text-gray-900">AI-Ranked Candidates</h2>
-                    </div>
-                    <button
-                      onClick={handleRefreshRankings}
-                      className="text-sm text-primary-600 hover:text-primary-700 font-medium"
-                    >
-                      Refresh
-                    </button>
-                  </div>
-                  <CandidateRanking
-                    candidates={rankedCandidates}
-                    onSelectCandidate={(c) => console.log('Selected:', c)}
-                  />
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Left: Tabs for Rankings/Applicants */}
+              <div>
+                {/* Tab Headers */}
+                <div className="flex gap-2 mb-4">
+                  <button
+                    onClick={() => setDetailTab('rankings')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                      detailTab === 'rankings'
+                        ? 'bg-primary-600 text-white'
+                        : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'
+                    }`}
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    AI Rankings ({rankedCandidates.length})
+                  </button>
+                  <button
+                    onClick={() => setDetailTab('applicants')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                      detailTab === 'applicants'
+                        ? 'bg-primary-600 text-white'
+                        : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'
+                    }`}
+                  >
+                    <Users className="w-4 h-4" />
+                    All Applicants ({applicants.length})
+                  </button>
                 </div>
 
-                {/* Right: Chatbot */}
-                <div>
-                  <Chatbot jobId={selectedJobId} />
-                </div>
+                {/* Tab Content */}
+                {detailTab === 'rankings' && (
+                  <>
+                    {isLoading ? (
+                      <div className="card">
+                        <Loading message="Ranking candidates..." />
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between mb-4">
+                          <h2 className="text-xl font-bold text-gray-900">AI-Ranked Candidates</h2>
+                          <button
+                            onClick={handleRefreshRankings}
+                            className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+                          >
+                            Refresh
+                          </button>
+                        </div>
+                        <CandidateRanking
+                          candidates={rankedCandidates}
+                          onSelectCandidate={(c) => console.log('Selected:', c)}
+                        />
+                      </>
+                    )}
+                  </>
+                )}
+
+                {detailTab === 'applicants' && (
+                  <>
+                    {loadingApplicants ? (
+                      <div className="card">
+                        <Loading message="Loading applicants..." />
+                      </div>
+                    ) : applicants.length === 0 ? (
+                      <div className="card text-center py-12">
+                        <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                        <h3 className="text-xl font-semibold text-gray-900 mb-2">No Applicants Yet</h3>
+                        <p className="text-gray-600">
+                          Candidates will appear here once they apply to this job.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <h2 className="text-xl font-bold text-gray-900">All Applicants</h2>
+                        {applicants.map((applicant) => (
+                          <div key={applicant.application_id} className="card">
+                            <div className="flex justify-between items-start">
+                              <div className="flex-1">
+                                <h4 className="text-lg font-semibold text-gray-900 mb-2">
+                                  {applicant.full_name}
+                                </h4>
+
+                                <div className="space-y-1 text-sm text-gray-600 mb-3">
+                                  {applicant.email && (
+                                    <div className="flex items-center gap-2">
+                                      <Mail className="w-4 h-4" />
+                                      <span>{applicant.email}</span>
+                                    </div>
+                                  )}
+                                  {applicant.phone && (
+                                    <div className="flex items-center gap-2">
+                                      <Phone className="w-4 h-4" />
+                                      <span>{applicant.phone}</span>
+                                    </div>
+                                  )}
+                                  {applicant.location && (
+                                    <div className="flex items-center gap-2">
+                                      <MapPin className="w-4 h-4" />
+                                      <span>{applicant.location}</span>
+                                    </div>
+                                  )}
+                                  {applicant.years_experience && (
+                                    <div className="flex items-center gap-2">
+                                      <Clock className="w-4 h-4" />
+                                      <span>{applicant.years_experience} years experience</span>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {applicant.professional_summary && (
+                                  <p className="text-sm text-gray-700 line-clamp-2">
+                                    {applicant.professional_summary}
+                                  </p>
+                                )}
+                              </div>
+
+                              <div className="ml-4 text-right">
+                                <span
+                                  className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                    applicant.status === 'applied'
+                                      ? 'bg-blue-100 text-blue-700'
+                                      : applicant.status === 'interviewed'
+                                      ? 'bg-yellow-100 text-yellow-700'
+                                      : applicant.status === 'hired'
+                                      ? 'bg-green-100 text-green-700'
+                                      : 'bg-gray-100 text-gray-600'
+                                  }`}
+                                >
+                                  {applicant.status}
+                                </span>
+                                <p className="text-xs text-gray-500 mt-2">
+                                  Applied {formatDate(applicant.applied_at)}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
-            )}
+
+              {/* Right: Chatbot */}
+              <div>
+                <Chatbot jobId={selectedJobId} />
+              </div>
+            </div>
           </>
         )}
       </div>

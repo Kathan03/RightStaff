@@ -54,6 +54,11 @@ class JobCreateRequest(BaseModel):
     location: Optional[str] = None
 
 
+class ApplyToJobRequest(BaseModel):
+    """Request body for applying to a job."""
+    candidate_id: str
+
+
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def create_job(
     request: JobCreateRequest,
@@ -165,7 +170,7 @@ async def get_job(
 @router.post("/{job_id}/apply", status_code=status.HTTP_201_CREATED)
 async def apply_to_job(
     job_id: str,
-    candidate_id: str,
+    request: ApplyToJobRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -232,6 +237,7 @@ async def apply_to_job(
         # ════════════════════════════════════════════════════════
         # STEP 2: Validate candidate exists
         # ════════════════════════════════════════════════════════
+        candidate_id = request.candidate_id
         candidate_result = await db.execute(
             select(Candidate).where(Candidate.id == candidate_id)
         )
@@ -304,6 +310,79 @@ async def apply_to_job(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create application: {str(e)}"
+        )
+
+
+@router.get("/{job_id}/applicants")
+async def get_job_applicants(
+    job_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get all candidates who have applied to a specific job.
+
+    Args:
+        job_id: UUID of the job
+        db: Database session
+
+    Returns:
+        List of applicants with their details
+    """
+    try:
+        # Verify job exists
+        job_result = await db.execute(
+            select(Job).where(Job.id == job_id)
+        )
+        job = job_result.scalar_one_or_none()
+
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+        # Get all applications for this job with candidate details
+        from app.models.candidate import CandidateContact
+
+        applications_result = await db.execute(
+            select(Application, Candidate)
+            .join(Candidate, Application.candidate_id == Candidate.id)
+            .where(Application.job_id == job_id)
+            .order_by(Application.applied_at.desc())
+        )
+
+        applicants = []
+        for application, candidate in applications_result.all():
+            # Get contact info
+            contact_result = await db.execute(
+                select(CandidateContact).where(CandidateContact.candidate_id == candidate.id)
+            )
+            contact = contact_result.scalar_one_or_none()
+
+            applicants.append({
+                "application_id": str(application.id),
+                "candidate_id": str(candidate.id),
+                "full_name": candidate.full_name,
+                "email": contact.email if contact else None,
+                "phone": contact.phone if contact else None,
+                "location": f"{contact.city}, {contact.region}" if contact and contact.city else None,
+                "years_experience": float(candidate.years_experience) if candidate.years_experience else None,
+                "professional_summary": candidate.professional_summary,
+                "status": application.status.value,
+                "applied_at": application.applied_at.isoformat()
+            })
+
+        return {
+            "job_id": str(job_id),
+            "job_title": job.title,
+            "total_applicants": len(applicants),
+            "applicants": applicants
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error getting applicants: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get applicants: {str(e)}"
         )
 
 
