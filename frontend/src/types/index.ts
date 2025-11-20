@@ -83,6 +83,26 @@ export interface ApplyToJobResponse {
   message: string;
 }
 
+export interface Applicant {
+  application_id: string;
+  candidate_id: string;
+  full_name: string;
+  email?: string;
+  phone?: string;
+  location?: string;
+  years_experience?: number;
+  professional_summary?: string;
+  status: string;
+  applied_at: string;
+}
+
+export interface ApplicantsResponse {
+  job_id: string;
+  job_title: string;
+  total_applicants: number;
+  applicants: Applicant[];
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Ranking Types
 // ═══════════════════════════════════════════════════════════════

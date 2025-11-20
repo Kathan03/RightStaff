@@ -1,6 +1,6 @@
 import React from 'react';
 import { RankedCandidate } from '../../types';
-import { Star, TrendingUp, Award, Users } from 'lucide-react';
+import { TrendingUp, Award, Users, Target } from 'lucide-react';
 
 interface CandidateRankingProps {
   candidates: RankedCandidate[];
@@ -11,6 +11,12 @@ export const CandidateRanking: React.FC<CandidateRankingProps> = ({
   candidates,
   onSelectCandidate,
 }) => {
+  // Helper to format score as percentage (clamped to 0-100)
+  const formatScore = (score: number | undefined): string => {
+    if (score === undefined) return 'N/A';
+    const percentage = Math.max(0, Math.min(100, score * 100));
+    return `${percentage.toFixed(0)}%`;
+  };
   const getBandColor = (band: string) => {
     switch (band.toLowerCase()) {
       case 'high':
@@ -128,19 +134,20 @@ export const CandidateRanking: React.FC<CandidateRankingProps> = ({
             {/* Score Section */}
             <div className="ml-6 text-right">
               <div className="flex items-center gap-2 mb-3">
-                <Star className="w-6 h-6 text-yellow-500 fill-current" />
+                <Target className="w-6 h-6 text-primary-600" />
                 <span className="text-3xl font-bold text-primary-600">
-                  {(candidate.final_score * 100).toFixed(0)}
+                  {formatScore(candidate.confidence)}
                 </span>
               </div>
+              <p className="text-xs text-gray-500 mb-3">Confidence Score</p>
 
               <div className="text-xs text-gray-600 space-y-1 bg-gray-50 p-3 rounded-lg">
                 <p className="font-semibold text-gray-700 mb-2">Score Breakdown</p>
                 {candidate.score_breakdown.dense_score !== undefined && (
                   <div className="flex justify-between gap-4">
-                    <span>Dense:</span>
+                    <span>Semantic:</span>
                     <span className="font-medium">
-                      {(candidate.score_breakdown.dense_score * 100).toFixed(0)}%
+                      {formatScore(candidate.score_breakdown.dense_score)}
                     </span>
                   </div>
                 )}
@@ -148,15 +155,15 @@ export const CandidateRanking: React.FC<CandidateRankingProps> = ({
                   <div className="flex justify-between gap-4">
                     <span>Structured:</span>
                     <span className="font-medium">
-                      {(candidate.score_breakdown.structured_score * 100).toFixed(0)}%
+                      {formatScore(candidate.score_breakdown.structured_score)}
                     </span>
                   </div>
                 )}
                 {candidate.score_breakdown.pairwise_score !== undefined && (
                   <div className="flex justify-between gap-4">
-                    <span>Pairwise:</span>
+                    <span>Comparison:</span>
                     <span className="font-medium">
-                      {(candidate.score_breakdown.pairwise_score * 100).toFixed(0)}%
+                      {formatScore(candidate.score_breakdown.pairwise_score)}
                     </span>
                   </div>
                 )}
@@ -164,16 +171,10 @@ export const CandidateRanking: React.FC<CandidateRankingProps> = ({
                   <div className="flex justify-between gap-4">
                     <span>Complete:</span>
                     <span className="font-medium">
-                      {(candidate.score_breakdown.completeness_score * 100).toFixed(0)}%
+                      {formatScore(candidate.score_breakdown.completeness_score)}
                     </span>
                   </div>
                 )}
-                <div className="flex justify-between gap-4 pt-2 border-t border-gray-200 mt-2">
-                  <span className="font-semibold">Confidence:</span>
-                  <span className="font-semibold">
-                    {(candidate.confidence * 100).toFixed(0)}%
-                  </span>
-                </div>
               </div>
             </div>
           </div>
