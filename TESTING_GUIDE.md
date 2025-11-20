@@ -1,7 +1,22 @@
 # 🧪 RightStaff Comprehensive Testing Guide
 
-**Last Updated**: 2025-11-17
-**Version**: 2.0 (Day-5 Complete - Application Tracking + Resume Upload + Job Embeddings)
+**Last Updated**: 2025-11-20
+**Version**: 3.0 (Complete Test Coverage with Execution Traces)
+
+---
+
+## 🎯 Test Coverage Summary
+
+| Test File | Tests | Coverage Area | Status |
+|-----------|-------|---------------|--------|
+| `test_ranking.py` | 8 | Ranking pipeline components | ✅ Complete |
+| `test_ranking_comprehensive.py` | 5 | End-to-end ranking | ✅ Complete |
+| `test_parsers.py` | 18 | Document parsing & chunking | ✅ Complete |
+| `test_fairness.py` | 16 | Bias detection & compliance | ✅ Complete |
+| `test_llm_parser.py` | 15 | LLM field extraction | ✅ Complete |
+| `test_webhooks.py` | 10 | Webhook handlers | ✅ NEW |
+| `test_sql_filter.py` | 14 | SQL gating logic | ✅ NEW |
+| `test_api_endpoints.py` | 12 | API endpoint coverage | ✅ NEW |
 
 ---
 
@@ -674,9 +689,44 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/v1/webhooks/job-ingestion" `
 
 ## Feature Testing
 
+---
+
+### 📁 Execution Trace Legend
+
+Each test includes an **Execution Trace** showing the file path through the codebase:
+
+```
+Entry Point → Business Logic → Storage Layer
+```
+
+Format: `file.py:function_name()` with brief context explanation.
+
+---
+
 ### Feature 1: Application Tracking (PROMPT_1)
 
 **Purpose**: Ensure ranking searches ONLY candidates who applied to jobs
+
+**Execution Trace**:
+```
+1. api/jobs.py:rank_candidates_full() - Entry point (HTTP POST)
+2. services/ranking.py:RankingService.rank_candidates() - Orchestration
+3. PostgreSQL: SELECT candidate_id FROM application WHERE job_id = ? - Get applicants
+4. services/sql_filter.py:apply_combined_sql_gates(application_ids) - Filter only applicants
+5. services/retrieval.py:dense_retriever.retrieve_candidates() - Semantic search
+6. Return: Only candidates in application_ids
+```
+
+**Why this trace matters**: The application_ids optimization provides 100x performance improvement by reducing the search space from 10,000 candidates to 100 applicants.
+
+**Manual Database Verification**:
+```sql
+-- Verify only applicants are ranked
+SELECT c.full_name, a.status
+FROM rightstaff.application a
+JOIN rightstaff.candidate c ON a.candidate_id = c.id
+WHERE a.job_id = '<job_id>';
+```
 
 **Test Steps**:
 
@@ -720,6 +770,69 @@ curl -X POST "http://localhost:8000/api/v1/jobs/${JOB_ID}/rank_full" -d '{"use_c
 ### Feature 2: Resume-First Upload (PROMPT_2)
 
 **Purpose**: Parse resume first, pre-fill form, then full ingestion
+
+**Execution Trace (Stage 1 - Parse Only)**:
+```
+1. api/candidates.py:upload_resume() - Entry point (HTTP POST multipart)
+2. services/s3_client.py:upload_file() - Store file in MinIO bucket
+3. services/redis_client.py:lpush("ingestion_queue") - Queue parse-only job
+4. services/ingestion.py:process_job(mode="parse_only") - Background worker
+   4.1 services/s3_client.py:download_file() - Fetch from MinIO
+   4.2 services/parsers.py:parse_resume_text() - Extract text
+   4.3 services/skill_extractor.py:extract_skills() - Extract skills (hybrid/spaCy)
+   4.4 services/redis_client.py:set("parsed_candidate:{temp_id}") - Cache result
+5. Return: temp_id + parsed_data
+```
+
+**Execution Trace (Stage 3 - Full Ingestion)**:
+```
+1. api/candidates.py:create_candidate() - Entry point (HTTP POST JSON)
+2. services/redis_client.py:get("parsed_candidate:{temp_id}") - Validate temp_id
+3. PostgreSQL INSERT candidate - Create candidate record
+4. PostgreSQL INSERT candidate_contact - Create contact record
+5. services/redis_client.py:lpush("ingestion_queue") - Queue FULL ingestion
+6. services/ingestion.py:process_job(mode="full") - Background worker
+   6.1 PostgreSQL SELECT candidate - Fetch candidate
+   6.2 services/s3_client.py:download_file() - Fetch resume
+   6.3 services/parsers.py:parse_resume() - Parse text
+   6.4 services/skill_extractor.py:extract_skills() - Extract skills
+   6.5 PostgreSQL INSERT candidate_skill - Store skills
+   6.6 services/parsers.py:chunk_text() - Create chunks
+   6.7 services/embeddings.py:embed_batch() - Generate embeddings
+   6.8 services/vector_store.py:upsert_vectors() - Store in Qdrant
+7. services/redis_client.py:delete("parsed_candidate:{temp_id}") - Clear cache
+8. Return: candidate_id
+```
+
+**Manual Database Verification**:
+```sql
+-- Check candidate created
+SELECT id, full_name, years_experience FROM rightstaff.candidate WHERE id = '<temp_id>';
+
+-- Check contact created
+SELECT * FROM rightstaff.candidate_contact WHERE candidate_id = '<temp_id>';
+
+-- Check skills linked
+SELECT s.name FROM rightstaff.candidate_skill cs
+JOIN rightstaff.skill s ON cs.skill_id = s.id
+WHERE cs.candidate_id = '<temp_id>';
+```
+
+**Redis Verification**:
+```bash
+# Check cached parsed data (before candidate creation)
+docker exec -it rightstaff-redis redis-cli GET "parsed_candidate:<temp_id>"
+
+# Verify cache cleared (after candidate creation)
+docker exec -it rightstaff-redis redis-cli GET "parsed_candidate:<temp_id>"
+# Expected: (nil)
+```
+
+**Qdrant Verification**:
+```bash
+# Check embeddings created
+curl "http://localhost:6333/collections/candidates_v1/points/scroll" | jq '.result.points[] | select(.payload.candidate_id == "<candidate_id>")'
+```
 
 **Test Steps**:
 
@@ -798,6 +911,53 @@ docker exec -it rightstaff-redis redis-cli GET "parsed_candidate:${TEMP_ID}"
 ### Feature 3: Job Embeddings Optimization (PROMPT_3)
 
 **Purpose**: Pre-compute job embeddings for 50% faster ranking
+
+**Execution Trace (Job Ingestion Webhook)**:
+```
+1. api/webhooks.py:job_ingestion_webhook() - Entry point (HTTP POST)
+2. services/ontology.py:normalize_skill() - Normalize each skill to canonical form
+3. services/ontology.py:expand_skills() - Expand with synonyms (Python → python, Python3)
+4. services/job_embeddings.py:generate_job_embeddings() - Create dual embeddings
+   4.1 Embedding 1: Profile vector (title + description text)
+   4.2 Embedding 2: Skills vector (expanded skills list)
+5. services/vector_store.py:upsert_points("jobs_v1") - Store in Qdrant
+6. services/redis_client.py:set("job_embeddings:{job_id}") - Cache for 1 hour
+7. Return: success + embedding metadata
+```
+
+**Execution Trace (Ranking with Pre-computed Embeddings)**:
+```
+1. api/jobs.py:rank_candidates_full() - Entry point
+2. services/ranking.py:RankingService.rank_candidates()
+3. services/job_embeddings.py:job_embedding_service.get_or_create_job_embeddings()
+   3.1 services/redis_client.py:get("job_embeddings:{job_id}") - Check cache
+   3.2 If cached: Return immediately (50ms)
+   3.3 If not cached: Generate on-the-fly (500ms)
+4. services/retrieval.py:dense_retriever.retrieve_candidates() - Use pre-computed vectors
+5. Continue ranking pipeline...
+```
+
+**Why this trace matters**: Pre-computing job embeddings reduces ranking latency by 50% (2.5s → 1.5s) because embedding generation (500ms) happens at job creation, not at ranking time.
+
+**Manual Verification**:
+```bash
+# Check Qdrant jobs_v1 collection
+curl "http://localhost:6333/collections/jobs_v1/points/scroll" | jq
+
+# Expected: 2 points per job (profile + skills)
+# {
+#   "id": "{job_id}_profile",
+#   "payload": {"type": "profile", "title": "..."}
+# },
+# {
+#   "id": "{job_id}_skills",
+#   "payload": {"type": "skills", "skills": [...]}
+# }
+
+# Check Redis cache
+docker exec -it rightstaff-redis redis-cli GET "job_embeddings:<job_id>"
+# Expected: JSON with profile_vector and skills_vector
+```
 
 **Test Steps**:
 
@@ -1188,6 +1348,128 @@ time curl -X POST "http://localhost:8000/api/v1/jobs/${JOB_ID}/rank_full" \
 
 ---
 
+## API Endpoint Execution Traces
+
+### Complete Trace Reference
+
+This section documents the execution flow for every API endpoint.
+
+---
+
+#### GET /health
+```
+1. main.py:health_check() - Entry point
+2. database.py:get_db() - Test PostgreSQL
+3. vector_store.py:health_check() - Test Qdrant
+4. redis_client.py:ping() - Test Redis
+5. s3_client.py:health_check() - Test MinIO
+6. Return: Aggregated status
+```
+
+#### POST /api/v1/webhooks/candidate-updated
+```
+1. api/webhooks.py:candidate_updated_webhook() - Entry point
+2. PostgreSQL: SELECT candidate WHERE id = ? - Validate exists
+3. redis_client.py:lpush("ingestion_queue") - Queue job
+4. Return: 202 Accepted + job_id
+```
+
+#### POST /api/v1/webhooks/job-ingestion
+```
+1. api/webhooks.py:job_ingestion_webhook() - Entry point
+2. services/ontology.py:normalize_skill() - Normalize skills
+3. services/ontology.py:expand_skills() - Add synonyms
+4. services/job_embeddings.py:generate_job_embeddings() - Create vectors
+5. services/vector_store.py:upsert_points("jobs_v1") - Store in Qdrant
+6. services/redis_client.py:set() - Cache embeddings
+7. Return: success + metadata
+```
+
+#### POST /api/v1/candidates/upload-resume
+```
+1. api/candidates.py:upload_resume() - Entry point
+2. services/s3_client.py:upload_file() - Store in MinIO
+3. services/redis_client.py:lpush() - Queue parse-only job
+4. Poll: services/redis_client.py:get() - Wait for parsing
+5. Return: temp_id + parsed_data
+```
+
+#### GET /api/v1/candidates/parsed/{temp_id}
+```
+1. api/candidates.py:get_parsed_candidate() - Entry point
+2. services/redis_client.py:get("parsed_candidate:{temp_id}") - Fetch cache
+3. Return: parsed data or 404
+```
+
+#### POST /api/v1/candidates/
+```
+1. api/candidates.py:create_candidate() - Entry point
+2. services/redis_client.py:get() - Validate temp_id
+3. PostgreSQL: INSERT candidate - Create record
+4. PostgreSQL: INSERT candidate_contact - Create contact
+5. services/redis_client.py:lpush() - Queue full ingestion
+6. services/redis_client.py:delete() - Clear cache
+7. Return: candidate_id
+```
+
+#### POST /api/v1/jobs/
+```
+1. api/jobs.py:create_job() - Entry point
+2. PostgreSQL: INSERT job - Create job record
+3. Return: job_id + title + status
+```
+
+#### POST /api/v1/jobs/{job_id}/apply
+```
+1. api/jobs.py:apply_to_job() - Entry point
+2. PostgreSQL: SELECT job - Validate job exists + is open
+3. PostgreSQL: SELECT candidate - Validate candidate exists
+4. PostgreSQL: INSERT application - Create application (UNIQUE constraint)
+5. Return: application_id + status
+```
+
+#### POST /api/v1/jobs/{job_id}/rank_full
+```
+1. api/jobs.py:rank_candidates_full() - Entry point
+2. services/redis_client.py:get() - Check cache
+3. services/ranking.py:RankingService.rank_candidates() - Orchestration
+   3.1 PostgreSQL: SELECT job - Fetch job data
+   3.2 PostgreSQL: SELECT applications - Get applicant IDs
+   3.3 services/sql_filter.py:apply_combined_sql_gates() - SQL filtering
+   3.4 services/retrieval.py:dense_retriever.retrieve_candidates() - Semantic search
+   3.5 services/scoring.py:structured_scorer.calculate_score() - Scoring
+   3.6 services/ranking.py:_blend_scores() - Score blending (0.40 dense + 0.35 structured + 0.25 completeness)
+   3.7 services/ranking.py:_band_candidates() - Confidence banding (high/medium/low)
+   3.8 services/explanation.py:generate() - Explanation generation
+4. services/redis_client.py:set() - Cache results (5 min TTL)
+5. Return: ranked_candidates + metadata
+```
+
+#### WS /api/v1/chat/{job_id}
+```
+1. api/chat.py:websocket_chat() - Entry point (WebSocket)
+2. services/chatbot_langgraph.py:check_guardrails() - EEOC compliance
+3. services/chatbot_langgraph.py:retrieve_context() - Vector search
+4. services/chatbot_langgraph.py:generate_response() - LLM response
+5. Send: response + citations via WebSocket
+```
+
+#### GET /api/v1/admin/metrics
+```
+1. api/admin.py:get_metrics() - Entry point
+2. services/metrics.py:metrics_collector.get_metrics() - Collect all
+3. Return: counters + timings + gauges
+```
+
+#### GET /api/v1/admin/dlq
+```
+1. api/admin.py:get_dlq() - Entry point
+2. services/redis_client.py:get_dlq_entries() - Fetch failed jobs
+3. Return: depth + sample_entries
+```
+
+---
+
 ## Unit & Integration Tests
 
 ### Running Tests
@@ -1206,22 +1488,37 @@ pytest tests/ -m integration -v
 
 # With coverage
 pytest tests/ --cov=app --cov-report=html
+
+# Run new test files
+pytest tests/test_webhooks.py -v
+pytest tests/test_sql_filter.py -v
+pytest tests/test_api_endpoints.py -v
 ```
 
 ### Test Files
 
 | Test File | Purpose | Coverage | Status |
 |-----------|---------|----------|--------|
-| `test_health.py` | Infrastructure health | Service connections | ✅ Complete |
+| `test_ranking.py` | Ranking components | Scoring, blending, banding (8 tests) | ✅ Complete |
+| `test_ranking_comprehensive.py` | Full ranking pipeline | E2E ranking (5 tests) | ✅ Complete |
 | `test_parsers.py` | Document parsing | TXT extraction + chunking (18 tests) | ✅ Complete |
-| `test_ontology.py` | Skill extraction | spaCy NER + patterns | ✅ Complete |
-| `test_embeddings.py` | Text vectorization | Embedding generation | ✅ Complete |
-| `test_job_embeddings.py` | Job vectorization | Dual embeddings | ✅ Complete |
-| `test_vector_store.py` | Qdrant operations | Vector CRUD | ✅ Complete |
-| `test_ranking.py` | Ranking components | Scoring, blending, banding | ✅ Complete |
-| `test_ranking_comprehensive.py` | Full ranking pipeline | E2E ranking | ✅ Complete |
-| `test_api.py` | API endpoints | HTTP request/response | ⏳ Partial |
 | `test_fairness.py` | Bias detection | 16+ fairness tests | ✅ Complete |
+| `test_llm_parser.py` | LLM field extraction | Parser validation (15 tests) | ✅ Complete |
+| `test_webhooks.py` | Webhook handlers | candidate-updated, job-ingestion (10 tests) | ✅ **NEW** |
+| `test_sql_filter.py` | SQL gating logic | Skills, years, location filters (14 tests) | ✅ **NEW** |
+| `test_api_endpoints.py` | API endpoints | All HTTP routes + WebSocket (12 tests) | ✅ **NEW** |
+| `test_skills.py` | Skill extraction | Ontology + normalization | ⏳ Partial |
+
+### Feature Tests
+
+| Test File | Purpose | Location |
+|-----------|---------|----------|
+| `test_health.py` | Infrastructure health | `feature_tests/` |
+| `test_ontology.py` | Skill taxonomy | `feature_tests/` |
+| `test_embeddings.py` | Text vectorization | `feature_tests/` |
+| `test_job_embeddings.py` | Job vectorization | `feature_tests/` |
+| `test_vector_store.py` | Qdrant operations | `feature_tests/` |
+| `test_api.py` | Quick API smoke test | `feature_tests/` |
 
 ### Example: Running Fairness Tests
 
@@ -1477,6 +1774,12 @@ Before deploying:
 
 ---
 
-**Last Updated**: 2025-11-17
-**Version**: 2.0 (Day-5 Complete)
-**Next Update**: After Day-6 implementation (TASK 4-12)
+**Last Updated**: 2025-11-20
+**Version**: 3.0 (Complete Test Coverage with Execution Traces)
+**Changes in v3.0**:
+- Added execution traces for all 12 API endpoints
+- Created 3 new test files: `test_webhooks.py`, `test_sql_filter.py`, `test_api_endpoints.py`
+- Added 36 new unit tests covering webhooks, SQL filters, and API endpoints
+- Added manual database verification commands for each feature
+- Added Redis and Qdrant verification commands
+- Updated test file table with accurate test counts
