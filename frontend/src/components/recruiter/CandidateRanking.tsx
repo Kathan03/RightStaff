@@ -11,6 +11,13 @@ export const CandidateRanking: React.FC<CandidateRankingProps> = ({
   candidates,
   onSelectCandidate,
 }) => {
+  // Clamp score to 0-100% range
+  const formatScore = (score: number | undefined): string => {
+    if (score === undefined) return 'N/A';
+    const percentage = Math.max(0, Math.min(100, score * 100));
+    return percentage.toFixed(0);
+  };
+
   const getBandColor = (band: string) => {
     switch (band.toLowerCase()) {
       case 'high':
@@ -130,7 +137,7 @@ export const CandidateRanking: React.FC<CandidateRankingProps> = ({
               <div className="flex items-center gap-2 mb-3">
                 <Star className="w-6 h-6 text-yellow-500 fill-current" />
                 <span className="text-3xl font-bold text-primary-600">
-                  {(candidate.final_score * 100).toFixed(0)}
+                  {formatScore(candidate.final_score)}
                 </span>
               </div>
 
@@ -171,7 +178,7 @@ export const CandidateRanking: React.FC<CandidateRankingProps> = ({
                 <div className="flex justify-between gap-4 pt-2 border-t border-gray-200 mt-2">
                   <span className="font-semibold">Confidence:</span>
                   <span className="font-semibold">
-                    {(candidate.confidence * 100).toFixed(0)}%
+                    {formatScore(candidate.confidence)}%
                   </span>
                 </div>
               </div>
