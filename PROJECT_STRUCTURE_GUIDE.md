@@ -1254,6 +1254,133 @@ job_embeddings.py -> expand_skills(skill_list)
 -> Returns expanded skill list -> job_embeddings.py uses for embedding
 ```
 
+**🌐 Invoked By FastAPI Endpoints:**
+- Not directly invoked by API endpoints
+- Called through the skill extraction chain:
+  - `POST /api/v1/webhooks/candidate-updated` → `ingestion.py` → `skill_extractor.py` → `ontology.py`
+  - `POST /api/v1/candidates/upload-resume` → `ingestion.py` → `skill_extractor.py` → `ontology.py`
+  - `POST /api/v1/candidates/` → `ingestion.py` → `skill_extractor.py` → `ontology.py`
+
+---
+
+#### **`skill_extractor.py`** - Unified Skill Extraction Interface 🎯
+**What it does:** Provides a single, unified interface for extracting skills from text using multiple methods.
+
+**Key concepts:**
+- **Method Selection**: Choose between "hybrid", "llm", or "spacy" extraction methods
+- **Hybrid Approach**: Combines LLM and spaCy for best accuracy (~90%)
+- **Normalization**: All extracted skills are normalized through ontology
+
+**Main functionalities:**
+1. Extracts skills using selected method
+2. Merges results from multiple sources (in hybrid mode)
+3. Normalizes all skills through ontology
+4. Returns consistent `List[str]` format
+
+**Why it's needed:**
+- Provides ONE entry point for all skill extraction
+- Allows easy switching between extraction methods
+- Ensures consistent output format across all pipelines
+
+**Example:**
+```python
+# Extract skills using hybrid method (LLM + spaCy)
+skills = await extract_skills(resume_text, method="hybrid")
+# Returns: ["Python", "Django", "PostgreSQL", "AWS"]
+
+# Extract skills using spaCy only (faster, lower accuracy)
+skills = await extract_skills(resume_text, method="spacy")
+```
+
+**📎 Used By (Dependencies):**
+- `services/ingestion.py` -> Uses `extract_skills()` for all skill extraction
+- `services/llm_parser.py` -> Called by skill_extractor when `method="llm"` or `method="hybrid"`
+
+**📎 This File Uses:**
+- `services/ontology.py` -> `extract_skills_from_text()`, `normalize_skill()` for spaCy extraction
+- `services/llm_parser.py` -> `LLMResumeParser` for LLM extraction
+- `config.py` -> `settings` for checking `USE_LLM_PARSING`
+
+**🔄 Complete Call Flow:**
+```
+ingestion.py -> extract_skills(text, method="hybrid")
+-> skill_extractor.py -> Checks method type
+   -> If hybrid: calls llm_parser.py AND ontology.py
+   -> If llm: calls llm_parser.py only
+   -> If spacy: calls ontology.py only
+-> Normalizes all skills through ontology.normalize_skill()
+-> Returns deduplicated List[str] -> ingestion.py stores skills
+```
+
+**🌐 Invoked By FastAPI Endpoints:**
+- `POST /api/v1/webhooks/candidate-updated` ([webhooks.py](backend/app/api/webhooks.py))
+  → `enqueue_job()` → background worker → `ingestion.py` → `skill_extractor.py`
+- `POST /api/v1/candidates/upload-resume` ([candidates.py](backend/app/api/candidates.py))
+  → `ingestion.py` → `skill_extractor.py`
+- `POST /api/v1/candidates/` ([candidates.py](backend/app/api/candidates.py))
+  → `ingestion.py` → `skill_extractor.py`
+
+---
+
+#### **`llm_parser.py`** - LLM Resume Parser 🤖
+**What it does:** Extracts ALL fields from a resume using a local LLM (Large Language Model).
+
+**Key concepts:**
+- **LLM**: A large language model that can understand and extract information from text
+- **Structured Output**: Extracts specific fields like name, email, skills in a structured format
+- **JSON Schema**: Uses JSON schema to ensure consistent output format
+
+**Main functionalities:**
+1. Parses entire resume using local LLM (Qwen2-1.5B)
+2. Extracts: full_name, email, phone, location, years_experience, professional_summary, skills
+3. Returns structured dictionary with all extracted fields
+
+**Why it's needed:**
+- Much better accuracy than regex for extracting contact information
+- Can understand context and extract relevant information
+- Returns consistent structured output across all resumes
+
+**Example:**
+```python
+parser = LLMResumeParser()
+result = await parser.parse_resume(resume_text)
+# Returns:
+# {
+#   "full_name": "John Doe",
+#   "email": "john@example.com",
+#   "phone": "+1-555-1234",
+#   "location": {"city": "SF", "region": "CA", "country": "US"},
+#   "years_experience": 5.0,
+#   "professional_summary": "Experienced software engineer...",
+#   "skills": ["Python", "Django", "AWS"]
+# }
+```
+
+**📎 Used By (Dependencies):**
+- `services/ingestion.py` -> Uses `parse_resume()` in parse-only mode
+- `services/skill_extractor.py` -> Uses for LLM skill extraction when `method="llm"` or `method="hybrid"`
+
+**📎 This File Uses:**
+- `config.py` -> `settings` for model configuration
+- `utils/logging.py` -> `logger` for logging
+
+**🔄 Complete Call Flow:**
+```
+ingestion.py (parse-only mode) -> llm_parser.parse_resume(text)
+-> llm_parser.py -> Loads LLM model
+-> Sends prompt with JSON schema -> LLM generates structured output
+-> Parses JSON response -> Returns dict with all fields
+-> ingestion.py caches in Redis for form pre-fill
+```
+
+**🌐 Invoked By FastAPI Endpoints:**
+- `POST /api/v1/webhooks/candidate-updated` ([webhooks.py](backend/app/api/webhooks.py))
+  → `enqueue_job()` → background worker → `ingestion.py` → `llm_parser.py` (when `USE_LLM_PARSING=true`)
+- `POST /api/v1/candidates/upload-resume` ([candidates.py](backend/app/api/candidates.py))
+  → `ingestion.py` → `llm_parser.py` (parse-only mode)
+- `POST /api/v1/candidates/` ([candidates.py](backend/app/api/candidates.py))
+  → `ingestion.py` → `llm_parser.py` (full mode)
+
 ---
 
 #### **`chatbot.py`** - AI Chatbot 🤖
@@ -1353,6 +1480,255 @@ This folder contains tests to make sure everything works correctly.
 - `sqlalchemy`: Database toolkit
 - `sentence-transformers`: AI models
 - `qdrant-client`: Vector database client
+
+---
+
+## 📥 Data Ingestion Workflows
+
+### **What is Data Ingestion?**
+**Data ingestion** is the process of importing, transferring, loading, and processing data for immediate use or storage in a database. In RightStaff, we have multiple ways data enters the system.
+
+### **Why Multiple Pipelines?**
+Different sources require different processing:
+- **Webhooks**: External systems notify us (Portal Team)
+- **API Uploads**: Users upload directly via frontend
+- **Scripts**: Developers populate test data
+
+### **Complete Ingestion Documentation**
+For comprehensive details about all ingestion pipelines, data flow, and database schemas, see:
+- **[INGESTION_PIPELINES.md](./INGESTION_PIPELINES.md)** - Complete pipeline documentation
+- **[TESTING_INGESTION_PIPELINES.md](./TESTING_INGESTION_PIPELINES.md)** - Testing guide with commands
+
+### **Quick Overview: 4 Ingestion Pipelines**
+
+#### **Pipeline 1: Candidate Resume Webhook Ingestion** 📥
+**When:** Portal Team sends webhook notification
+**Trigger:** Candidate uploads resume on Portal Team's system
+
+**Flow:**
+```
+Webhook → Validate → Queue in Redis → Background Worker → 7-Stage Pipeline
+```
+
+**7-Stage Enrichment Pipeline:**
+1. Fetch candidate from PostgreSQL
+2. Download resume from MinIO
+3. Parse resume (extract text)
+4. Extract skills (LLM hybrid if enabled, spaCy fallback)
+5. Chunk text (split into pieces)
+6. Generate embeddings (convert to vectors)
+7. Store in Qdrant (save for semantic search)
+
+**LLM Support:** When `USE_LLM_PARSING=true`, uses hybrid method (LLM + spaCy) for better skill extraction accuracy. Disabled by default.
+
+**Databases Used:**
+- **PostgreSQL**: Read candidate, write skills
+- **MinIO**: Read resume file
+- **Redis**: Queue job
+- **Qdrant**: Write vectors
+
+**File:** `backend/app/api/webhooks.py:28-88`
+
+---
+
+#### **Pipeline 2: Candidate Resume Upload via API** 📤
+**When:** User uploads resume via frontend
+**Trigger:** User interaction on website
+
+**3-Stage Process:**
+
+**Stage 1: Upload & Parse** (`parse_only` mode)
+```
+Upload File → MinIO → Queue Parse Job → Extract Fields → Cache in Redis
+```
+- Extracts: name, email, phone, skills, location, experience
+- Uses LLM if enabled (Qwen), regex fallback
+- Caches for 1 hour
+- **NO PostgreSQL or Qdrant writes**
+
+**Stage 2: Get Parsed Data**
+```
+Frontend → Fetch from Redis → Pre-fill Form
+```
+
+**Stage 3: Create Candidate** (`full` mode)
+```
+Submit Form → Create in PostgreSQL → Queue Full Job → 7-Stage Pipeline
+```
+
+**Why 3 Stages?**
+- **Stage 1**: Fast feedback (user sees extracted data immediately)
+- **Stage 2**: Form pre-fill (better UX)
+- **Stage 3**: Full processing (happens in background)
+
+**Databases Used:**
+- **Stage 1**: MinIO (write), Redis (cache)
+- **Stage 2**: Redis (read)
+- **Stage 3**: PostgreSQL (write), Redis (queue), Qdrant (write via worker)
+
+**File:** `backend/app/api/candidates.py`
+
+---
+
+#### **Pipeline 3: Job Ingestion via Webhook** 💼
+**When:** Portal Team creates/updates job posting
+**Trigger:** New job or job update
+
+**Flow:**
+```
+Webhook → Expand Skills → Generate Embeddings → Store in Qdrant + Cache
+```
+
+**Processing:**
+1. Normalize skills (e.g., "python" → "Python")
+2. Expand skills (e.g., "Python" → ["Python", "Python3", "Python Programming"])
+3. Generate 2 embeddings:
+   - Profile embedding (title + description)
+   - Skills embedding (expanded skills)
+4. Store in Qdrant `jobs_v1` collection
+5. Cache in Redis (1-hour TTL)
+
+**Why Separate Collection?**
+- Jobs change less frequently than candidates
+- Semantic matching compares job vectors vs candidate vectors
+
+**Databases Used:**
+- **Qdrant**: Write to `jobs_v1` collection (2 points per job)
+- **Redis**: Cache embeddings
+
+**File:** `backend/app/api/webhooks.py:108-257`
+
+---
+
+#### **Pipeline 4: Dummy Data Population** 🧪
+**When:** Developer runs script manually
+**Trigger:** `python populate_dummy_data.py`
+
+**Flow:**
+```
+Create Jobs → Create Skills → Create Candidates → Generate Embeddings →
+Upload Resumes → Create Job Embeddings → Create Applications
+```
+
+**What It Creates:**
+- **PostgreSQL**: 6 jobs, 50 skills, 8 candidates, 30 applications
+- **Qdrant**: 24 candidate vectors + 12 job vectors
+- **MinIO**: 5 resume files (3 candidates without resumes for testing)
+
+**Why Important?**
+- Provides realistic test data
+- Tests all integrations
+- Verifies system health
+
+**File:** `backend/populate_dummy_data.py`
+
+---
+
+### **Data Flow Across All Databases**
+
+```
+┌─────────────────────────────────────────────────────┐
+│           INGESTION SOURCES                         │
+├─────────────────────────────────────────────────────┤
+│  • Portal Team Webhooks                             │
+│  • Frontend API Calls                               │
+│  • Manual Scripts                                   │
+└──────────────┬──────────────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────────────┐
+│           PROCESSING LAYER                          │
+├─────────────────────────────────────────────────────┤
+│  Parse → Extract → Normalize → Chunk → Embed       │
+└──────────────┬──────────────────────────────────────┘
+               │
+       ────────┼─────────────────────────
+       │       │           │            │
+       ▼       ▼           ▼            ▼
+  ┌────────┐ ┌────────┐ ┌──────┐ ┌──────────┐
+  │Postgres│ │ Qdrant │ │Redis │ │  MinIO   │
+  │        │ │        │ │      │ │          │
+  │Struct- │ │Vector  │ │Cache │ │  Files   │
+  │ured    │ │Search  │ │Queue │ │ (Resumes)│
+  │Data    │ │        │ │      │ │          │
+  └────────┘ └────────┘ └──────┘ └──────────┘
+```
+
+### **Database Roles**
+
+**PostgreSQL** - Source of Truth
+- Stores: Candidates, Jobs, Skills, Applications, Contact Info
+- Used For: SQL filtering, data validation, relationships
+
+**Qdrant** - Semantic Search Engine
+- Stores: Embeddings (384-dim vectors)
+- Used For: Finding similar candidates/jobs by meaning
+- Collections:
+  - `resumes`: Candidate vectors (profile + skills + chunks)
+  - `jobs_v1`: Job vectors (profile + skills)
+
+**Redis** - Speed Layer
+- Stores: Job queues, cached results, temporary data
+- Used For: Async processing, fast lookups, session data
+- TTL: Usually 1 hour (3600 seconds)
+
+**MinIO** - File Storage
+- Stores: Resume files (PDF, DOCX, TXT)
+- Used For: Source documents for parsing
+- Format: `resumes/{candidate_id}/resume.{ext}`
+
+### **Schema Consistency Across Pipelines**
+
+All pipelines follow these rules:
+
+1. **Skills**: Always `List[str]`, normalized through ontology
+2. **Location**: PostgreSQL uses separate fields (city, region, country)
+3. **IDs**: UUIDs in PostgreSQL, strings in Qdrant/Redis
+4. **Timestamps**: ISO 8601 format in Qdrant/Redis
+5. **Vectors**: Always 384 dimensions (sentence-transformers model)
+
+### **Common Ingestion Pattern**
+
+Most pipelines follow this pattern:
+
+```python
+# 1. Validate input
+if not candidate_exists:
+    raise HTTPException(404, "Not found")
+
+# 2. Queue job (async processing)
+job_data = {"job_id": ..., "candidate_id": ..., "mode": "full"}
+await redis_client.lpush("ingestion_queue", json.dumps(job_data))
+
+# 3. Return immediately (don't wait!)
+return {"status": "accepted", "job_id": ...}
+
+# 4. Background worker processes later
+# Worker polls Redis → Downloads file → Parses → Embeds → Stores
+```
+
+**Why This Pattern?**
+- **Fast response**: User doesn't wait 30+ seconds
+- **Reliable**: Jobs are queued even if processing is slow
+- **Scalable**: Can process many jobs concurrently
+- **Resilient**: Failed jobs retry automatically (up to 5 times)
+
+### **Testing Ingestion Pipelines**
+
+**Quick Test:**
+```bash
+# Clear all data
+cd backend
+../venv/Scripts/python clear_all_data.py
+
+# Populate test data (tests all pipelines!)
+../venv/Scripts/python populate_dummy_data.py
+
+# Verify data
+../venv/Scripts/python check_database.py
+```
+
+**For detailed testing instructions**, see [TESTING_INGESTION_PIPELINES.md](./TESTING_INGESTION_PIPELINES.md)
 
 ---
 

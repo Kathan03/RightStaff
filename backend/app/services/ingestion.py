@@ -226,6 +226,7 @@ class IngestionWorker:
                 # LLM-BASED FIELD EXTRACTION (with regex fallback)
                 # ══════════════════════════════════════════════════════════════
                 from app.config import settings
+                from app.services.skill_extractor import extract_skills
 
                 parsed_data = None
                 llm_parsing_attempted = False
@@ -239,27 +240,47 @@ class IngestionWorker:
                         llm_parser = get_llm_parser()
                         llm_result = await llm_parser.parse_resume(text)
 
-                        # Extract skills using ontology service (complement LLM skills)
-                        ontology_skills = await extract_skills_from_text(text)
+                        # ══════════════════════════════════════════════════════════════
+                        # SKILL EXTRACTION & NORMALIZATION (Unified Pipeline)
+                        # ══════════════════════════════════════════════════════════════
+                        # Extract skills using UNIFIED method
+                        # Change this ONE line to switch between LLM/spaCy/hybrid
+                        normalized_skills = await extract_skills(text, method="hybrid")
+                        # Options:
+                        #   method="hybrid" - LLM + spaCy (best, default when LLM enabled)
+                        #   method="llm"    - LLM only
+                        #   method="spacy"  - spaCy only
 
-                        # Merge LLM skills with ontology skills (deduplicate)
-                        llm_skills = llm_result.get("skills", [])
-                        all_skills = list(set(llm_skills + ontology_skills))
+                        # ══════════════════════════════════════════════════════════════
+                        # LOCATION EXTRACTION (consistent format)
+                        # ══════════════════════════════════════════════════════════════
+                        location_data = llm_result.get("location", {})
+                        if isinstance(location_data, dict):
+                            # LLM returns dict: {"city": "...", "state": "...", "country": "..."}
+                            location_dict = {
+                                "city": location_data.get("city"),
+                                "region": location_data.get("state"),  # state → region (matches DB schema)
+                                "country": location_data.get("country")
+                            }
+                        else:
+                            # Fallback for unexpected format
+                            location_dict = {"city": None, "region": None, "country": None}
 
                         parsed_data = {
                             "full_name": llm_result.get("full_name") or "Unknown",
                             "email": llm_result.get("email"),
                             "phone": llm_result.get("phone"),
-                            "skills": all_skills,
+                            "skills": normalized_skills,  # Normalized through ontology
                             "years_experience": llm_result.get("years_experience"),
-                            "location": llm_result.get("location", {}).get("city"),  # Flatten location
+                            "location": location_dict,  # Consistent dict format
                             "professional_summary": llm_result.get("professional_summary") or text[:500],
                             "s3_resume_url": s3_url
                         }
 
                         llm_parsing_attempted = True
                         logger.info(f"✅ LLM parsing successful")
-                        logger.info(f"   LLM Skills: {len(llm_skills)}, Ontology Skills: {len(ontology_skills)}, Total: {len(all_skills)}")
+                        logger.info(f"   Skills: {len(normalized_skills)} (normalized via hybrid method)")
+                        logger.info(f"   Location: {location_dict.get('city')}, {location_dict.get('region')}")
 
                     except Exception as e:
                         logger.warning(f"⚠️  LLM parsing failed, falling back to regex: {e}")
@@ -276,17 +297,41 @@ class IngestionWorker:
                         calculate_years_experience
                     )
 
-                    # Extract skills using ontology service
-                    extracted_skills = await extract_skills_from_text(text)
+                    # ══════════════════════════════════════════════════════════════
+                    # SKILL EXTRACTION & NORMALIZATION (Unified Pipeline)
+                    # ══════════════════════════════════════════════════════════════
+                    # Extract skills using UNIFIED method
+                    # Change this ONE line to switch between methods
+                    normalized_skills = await extract_skills(text, method="spacy")
+                    # Options:
+                    #   method="spacy"  - spaCy + patterns (default when LLM disabled)
+                    #   method="hybrid" - Would use LLM + spaCy (but LLM is disabled)
+                    #   method="llm"    - Would use LLM only (but LLM is disabled)
+
+                    # Parse location string to dict (consistent format)
+                    location_str = extract_location(text)
+                    location_dict = {"city": None, "region": None, "country": None}
+
+                    if location_str:
+                        # Try to parse "City, State" or "City, State ZIP" format
+                        parts = location_str.split(',')
+                        if len(parts) >= 2:
+                            location_dict["city"] = parts[0].strip()
+                            # Extract state code (2 letters)
+                            state_part = parts[1].strip().split()[0]  # Get first word (state code)
+                            if len(state_part) == 2:
+                                location_dict["region"] = state_part
+                        elif len(parts) == 1:
+                            location_dict["city"] = parts[0].strip()
 
                     parsed_data = {
                         "full_name": extract_name(text) or "Unknown",
                         "email": extract_email(text),
                         "phone": extract_phone(text),
-                        "skills": extracted_skills,
+                        "skills": normalized_skills,  # Normalized through ontology
                         "years_experience": calculate_years_experience(text),
-                        "location": extract_location(text),
-                        "professional_summary": text[:500],  # First 500 chars
+                        "location": location_dict,  # Consistent dict format
+                        "professional_summary": text[:500],
                         "s3_resume_url": s3_url
                     }
 
@@ -368,14 +413,23 @@ class IngestionWorker:
                 metrics_collector.record_timing("ingestion_stage_3_parse", stage_start)
                 
                 # ========================================
-                # STAGE 4: Extract skills (NEW: Day 3)
+                # STAGE 4: Extract fields and skills
                 # ========================================
                 stage_start = datetime.utcnow()
-                logger.info(f"[4/7] Extracting skills from resume text")
-                
-                # Extract skills using ontology service
-                extracted_skills = await extract_skills_from_text(text)
-                
+                logger.info(f"[4/7] Extracting fields and skills from resume text")
+
+                # Use unified skill extraction (LLM if enabled, spaCy fallback)
+                from app.services.skill_extractor import extract_skills
+
+                if settings.use_llm_parsing:
+                    logger.info("Using LLM-based extraction (hybrid mode: LLM + spaCy)")
+                    # Extract skills using hybrid method (LLM + spaCy)
+                    extracted_skills = await extract_skills(text, method="hybrid")
+                else:
+                    logger.info("Using spaCy-based extraction (LLM disabled)")
+                    # Extract skills using spaCy only
+                    extracted_skills = await extract_skills(text, method="spacy")
+
                 logger.info(f"✅ Extracted {len(extracted_skills)} skills: {', '.join(extracted_skills[:5])}{'...' if len(extracted_skills) > 5 else ''}")
                 metrics_collector.record_timing("ingestion_stage_4_skills", stage_start)
 
