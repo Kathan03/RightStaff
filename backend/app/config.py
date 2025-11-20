@@ -48,7 +48,19 @@ class Settings(BaseSettings):
         env="EMBEDDING_MODEL"
     )
     embedding_dim: int = Field(default=384, env="EMBEDDING_DIM")
-    
+
+    # LLM Parsing (Day 6)
+    use_llm_parsing: bool = Field(
+        default=False,  # Disabled by default - enable when ready
+        env="USE_LLM_PARSING",
+        description="Enable LLM-based resume parsing. Falls back to regex if disabled or on error."
+    )
+    llm_parser_model: str = Field(
+        default="Qwen/Qwen2-1.5B-Instruct",  # Smaller model for lower RAM usage
+        env="LLM_PARSER_MODEL",
+        description="HuggingFace model for resume field extraction (Qwen is smaller and faster)"
+    )
+
     # Text Processing
     chunk_size: int = Field(default=400, env="CHUNK_SIZE", ge=50, le=2000)
     chunk_overlap: int = Field(default=50, env="CHUNK_OVERLAP", ge=0, le=500)
