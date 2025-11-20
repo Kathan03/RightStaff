@@ -18,7 +18,7 @@ router = APIRouter()
 
 
 @router.websocket("/{job_id}")
-async def chat_websocket(websocket: WebSocket, job_id: int):
+async def chat_websocket(websocket: WebSocket, job_id: str):
     """
     WebSocket endpoint for job-scoped chatbot.
 

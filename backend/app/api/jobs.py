@@ -93,6 +93,75 @@ async def create_job(
     }
 
 
+@router.get("/")
+async def get_all_jobs(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get all jobs from the database.
+
+    Returns:
+        List of all jobs with their details
+    """
+    result = await db.execute(
+        select(Job).order_by(Job.created_at.desc())
+    )
+    jobs = result.scalars().all()
+
+    return [
+        {
+            "id": str(job.id),
+            "title": job.title,
+            "description": job.description,
+            "required_skills": job.required_skills_json or [],
+            "must_have_skills": job.must_have_skills_json or [],
+            "min_years_experience": float(job.min_years_experience) if job.min_years_experience else None,
+            "max_years_experience": float(job.max_years_experience) if job.max_years_experience else None,
+            "location": job.location,
+            "status": job.status.value if job.status else "open",
+            "created_at": job.created_at.isoformat() if job.created_at else None
+        }
+        for job in jobs
+    ]
+
+
+@router.get("/{job_id}")
+async def get_job(
+    job_id: str,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get a specific job by ID.
+
+    Args:
+        job_id: UUID of the job
+        db: Database session
+
+    Returns:
+        Job details
+    """
+    result = await db.execute(
+        select(Job).where(Job.id == job_id)
+    )
+    job = result.scalar_one_or_none()
+
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    return {
+        "id": str(job.id),
+        "title": job.title,
+        "description": job.description,
+        "required_skills": job.required_skills_json or [],
+        "must_have_skills": job.must_have_skills_json or [],
+        "min_years_experience": float(job.min_years_experience) if job.min_years_experience else None,
+        "max_years_experience": float(job.max_years_experience) if job.max_years_experience else None,
+        "location": job.location,
+        "status": job.status.value if job.status else "open",
+        "created_at": job.created_at.isoformat() if job.created_at else None
+    }
+
+
 @router.post("/{job_id}/apply", status_code=status.HTTP_201_CREATED)
 async def apply_to_job(
     job_id: str,
