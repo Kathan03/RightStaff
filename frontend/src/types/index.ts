@@ -51,6 +51,7 @@ export interface Job {
   min_years_experience?: number;
   max_years_experience?: number;
   status: string;
+  created_at?: string;
 }
 
 export interface CreateJobRequest {
