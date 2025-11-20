@@ -3,7 +3,8 @@ import {
   CreateJobRequest,
   CreateJobResponse,
   Job,
-  RankingResponse
+  RankingResponse,
+  ApplicantsResponse
 } from '../types';
 
 export const jobsApi = {
@@ -35,6 +36,12 @@ export const jobsApi = {
     const { data } = await apiClient.post(`/api/v1/jobs/${jobId}/rank_full`, {
       use_cache: useCache,
     });
+    return data;
+  },
+
+  // Get all applicants for a job
+  getApplicants: async (jobId: string): Promise<ApplicantsResponse> => {
+    const { data } = await apiClient.get(`/api/v1/jobs/${jobId}/applicants`);
     return data;
   },
 };
