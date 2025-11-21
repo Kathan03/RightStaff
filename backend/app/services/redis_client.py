@@ -1,8 +1,9 @@
 """
 Redis client for caching and queue management.
+
 Async version for FastAPI compatibility.
 
-DAY 3 ADDITIONS:
+Features:
 - Dead Letter Queue methods (push_dlq, get_dlq_entries, get_dlq_depth)
 - DLQ replay functionality
 - DLQ management (pop, clear)
@@ -51,7 +52,7 @@ class RedisClient:
         return await self.client.delete(key)
     
     # ========================================
-    # NEW: Dead Letter Queue Methods (Day 3)
+    # Dead Letter Queue Methods
     # ========================================
     
     async def push_dlq(self, value: str, queue_name: str = "ingestion_queue_dlq"):

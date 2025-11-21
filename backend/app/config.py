@@ -49,9 +49,9 @@ class Settings(BaseSettings):
     )
     embedding_dim: int = Field(default=384, env="EMBEDDING_DIM")
 
-    # LLM Parsing (Day 6)
+    # LLM Parsing
     use_llm_parsing: bool = Field(
-        default=False,  # Disabled by default - enable when ready
+        default=True,  # Enabled by default for better skill extraction accuracy
         env="USE_LLM_PARSING",
         description="Enable LLM-based resume parsing. Falls back to regex if disabled or on error."
     )
@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     chunk_size: int = Field(default=400, env="CHUNK_SIZE", ge=50, le=2000)
     chunk_overlap: int = Field(default=50, env="CHUNK_OVERLAP", ge=0, le=500)
 
-    # Cross-Encoder for Re-ranking (MVP - Days 9-10)
+    # Cross-Encoder for Re-ranking
     reranker_model: str = Field(
         default="cross-encoder/ms-marco-MiniLM-L-6-v2",
         env="RERANKER_MODEL"
