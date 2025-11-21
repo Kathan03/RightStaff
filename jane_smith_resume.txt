@@ -1,0 +1,33 @@
+﻿JANE SMITH
+Senior Python Developer
+
+Email: jane.smith@example.com
+Phone: (555) 123-4567
+Location: San Francisco, CA
+
+PROFESSIONAL SUMMARY
+Highly skilled Python engineer with 5 years of experience building scalable
+web applications using FastAPI, PostgreSQL, and modern cloud technologies.
+Proven track record of delivering high-quality software in fast-paced environments.
+
+TECHNICAL SKILLS
+- Languages: Python (Expert), JavaScript, SQL
+- Frameworks: FastAPI, Django, Flask, React
+- Databases: PostgreSQL, Redis, MongoDB
+- DevOps: Docker, Kubernetes, AWS, CI/CD
+- Tools: Git, Pytest, SQLAlchemy
+
+WORK EXPERIENCE
+Senior Python Developer | TechCorp Inc | 2020-Present
+- Built RESTful APIs using FastAPI serving 100K+ requests/day
+- Designed microservices architecture with Docker and Kubernetes
+- Optimized database queries reducing latency by 50%
+- Mentored junior developers and conducted code reviews
+
+Python Developer | StartupXYZ | 2019-2020
+- Developed web applications using Django and PostgreSQL
+- Implemented automated testing with 90% code coverage
+- Collaborated with frontend team using React
+
+EDUCATION
+B.S. Computer Science | University of California | 2019
