@@ -27,6 +27,7 @@ from sqlalchemy.orm import selectinload
 class RankedCandidate:
     """Final ranked candidate with all scores and explanations."""
     candidate_id: str
+    full_name: str
     final_score: float
     band: str  # 'high', 'medium', 'low'
     confidence: float
@@ -203,6 +204,7 @@ class RankingService:
 
             final_results.append(RankedCandidate(
                 candidate_id=result['candidate_id'],
+                full_name=result.get('full_name', 'Unknown'),
                 final_score=result['final_score'],
                 band=result['band'],
                 confidence=result['confidence'],
@@ -244,11 +246,13 @@ class RankingService:
         for retrieval in retrieval_results:
             dense_scores_map[retrieval.candidate_id] = retrieval.combined_score
 
-        # Build lookup dict for pairwise scores (NEW!)
+        # Build lookup dicts for pairwise scores and names
         pairwise_scores_map = {}
+        names_map = {}
         if candidates:
             for candidate in candidates:
                 pairwise_scores_map[candidate['id']] = candidate.get('pairwise_score', 0.0)
+                names_map[candidate['id']] = candidate.get('full_name', 'Unknown')
 
         # Iterate over ALL candidates who passed SQL gating
         for candidate_id, structured in structured_scores.items():
@@ -268,11 +272,12 @@ class RankingService:
 
             blended.append({
                 'candidate_id': candidate_id,
+                'full_name': names_map.get(candidate_id, 'Unknown'),
                 'final_score': final_score,
                 'scores': {
                     'dense': dense_score,
                     'structured': structured_score,
-                    'pairwise': pairwise_score,  # NEW!
+                    'pairwise': pairwise_score,
                     'completeness': completeness_score
                 }
             })
@@ -423,6 +428,7 @@ class RankingService:
         return [
             {
                 'candidate_id': r.candidate_id,
+                'full_name': r.full_name,
                 'final_score': r.final_score,
                 'band': r.band,
                 'confidence': r.confidence,
