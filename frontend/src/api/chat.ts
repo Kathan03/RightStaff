@@ -5,6 +5,7 @@ const WS_BASE_URL = process.env.REACT_APP_WS_URL || 'ws://localhost:8000';
 export class ChatWebSocket {
   private ws: WebSocket | null = null;
   private jobId: string;
+  private isIntentionalClose: boolean = false;
 
   constructor(jobId: string) {
     this.jobId = jobId;
@@ -32,6 +33,11 @@ export class ChatWebSocket {
     };
 
     this.ws.onerror = (error) => {
+      // Ignore errors from intentional close (React StrictMode double-mount)
+      if (this.isIntentionalClose) {
+        console.log('[WebSocket] Ignoring error from intentional close');
+        return;
+      }
       console.error('[WebSocket] Error:', error);
       onError(error);
     };
@@ -51,6 +57,8 @@ export class ChatWebSocket {
 
   disconnect() {
     if (this.ws) {
+      // Mark as intentional close to prevent error callback
+      this.isIntentionalClose = true;
       this.ws.close();
       this.ws = null;
     }
