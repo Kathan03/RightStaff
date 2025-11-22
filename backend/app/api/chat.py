@@ -56,9 +56,14 @@ async def chat_websocket(websocket: WebSocket, job_id: str):
                     "message": result['error']
                 })
             else:
+                # Send content as 'token' type (frontend expects this)
                 await websocket.send_json({
-                    "type": "response",
-                    "content": result['response'],
+                    "type": "token",
+                    "content": result['response']
+                })
+                # Send 'done' to signal completion
+                await websocket.send_json({
+                    "type": "done",
                     "citations": result['citations']
                 })
 
