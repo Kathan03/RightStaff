@@ -1,14 +1,14 @@
 """
 Background worker that processes ingestion jobs from Redis queue.
-Flow: Poll Redis → Fetch candidate → Download resume → Parse → Extract skills → Store skills in PostgreSQL → Chunk → Embed → Store in Qdrant
 
-DAY 3 ADDITIONS:
+Flow: Poll Redis → Fetch candidate → Download resume → Parse → Extract skills
+      → Store skills in PostgreSQL → Chunk → Embed → Store in Qdrant
+
+Features:
 - Retry logic with exponential backoff
 - Dead Letter Queue for failed jobs after max retries
-- Skills extraction from resume text
+- Skills extraction from resume text (LLM + spaCy hybrid)
 - Structured metrics collection
-
-DAY 5+ ADDITIONS:
 - Store extracted skills in PostgreSQL for SQL gating
 """
 import asyncio
@@ -37,9 +37,10 @@ from app.services.s3_client import s3_client
 from app.services.parsers import parse_resume, chunk_text
 from app.services.embeddings import embedding_service
 from app.services.vector_store import vector_store
-from app.services.ontology import extract_skills_from_text  # NEW: Day 3
-from app.services.metrics import metrics_collector  # NEW: Day 3
+from app.services.ontology import extract_skills_from_text
+from app.services.metrics import metrics_collector
 from app.utils.logging import logger
+from app.config import settings
 
 # Import S3Error for retry logic
 from minio.error import S3Error
@@ -225,7 +226,6 @@ class IngestionWorker:
                 # ══════════════════════════════════════════════════════════════
                 # LLM-BASED FIELD EXTRACTION (with regex fallback)
                 # ══════════════════════════════════════════════════════════════
-                from app.config import settings
                 from app.services.skill_extractor import extract_skills
 
                 parsed_data = None

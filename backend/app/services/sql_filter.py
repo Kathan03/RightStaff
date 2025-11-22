@@ -69,42 +69,55 @@ async def filter_candidates_by_must_have_skills(
     if not must_have_skills:
         logger.info("No must-have skills specified - skipping skill gate")
         return set()
-    
+
+    # Normalize job skills through taxonomy for consistent matching
+    from app.services.ontology import normalize_skill
+
+    normalized_job_skills = []
+    for skill in must_have_skills:
+        normalized = normalize_skill(skill, use_taxonomy=True)
+        normalized_job_skills.append(normalized.lower())
+
+    # Deduplicate in case multiple variants map to same canonical
+    normalized_job_skills = list(set(normalized_job_skills))
+
+    logger.info(
+        f"Applying must-have skills gate: {must_have_skills} "
+        f"→ normalized: {normalized_job_skills}"
+    )
+
     close_db = False
     if db is None:
         db = AsyncSessionLocal()
         close_db = True
-    
-    try:
-        logger.info(f"Applying must-have skills gate: {must_have_skills}")
 
-        # Build query
+    try:
+        # Build query with case-insensitive matching
         query = (
             select(CandidateSkill.candidate_id)
             .join(Skill, CandidateSkill.skill_id == Skill.id)
-            .where(Skill.name.in_(must_have_skills))
+            .where(func.lower(Skill.name).in_(normalized_job_skills))
         )
 
-        # PERFORMANCE OPTIMIZATION: Filter by application_ids FIRST
+        # Filter by application_ids if provided
         if application_ids:
             from uuid import UUID
-            # Convert string UUIDs to UUID objects for SQL query
             uuid_list = [UUID(app_id) for app_id in application_ids]
             query = query.where(CandidateSkill.candidate_id.in_(uuid_list))
             logger.info(f"  → Filtering by {len(application_ids)} application IDs")
 
-        # Apply skill matching logic
+        # Require candidate to have at least as many skills as originally requested
         query = query.group_by(CandidateSkill.candidate_id).having(
-            func.count(func.distinct(CandidateSkill.skill_id)) == len(must_have_skills)
+            func.count(func.distinct(CandidateSkill.skill_id)) >= len(must_have_skills)
         )
-        
+
         result = await db.execute(query)
         candidate_ids = {str(row[0]) for row in result.all()}
-        
+
         logger.info(f"✅ {len(candidate_ids)} candidates passed must-have skills gate")
-        
+
         return candidate_ids
-        
+
     finally:
         if close_db:
             await db.close()
@@ -340,14 +353,15 @@ async def apply_combined_sql_gates(
                 logger.warning("No candidates passed years filter - returning empty set")
                 return set()
         
-        # Gate 3: Location
+        # Gate 3: Location - REMOVED AS HARD GATE
+        # Location is now handled by structured scoring (20% weight) in scoring.py
+        # This provides graduated penalties instead of exclusion:
+        # - 1.0 for same city match
+        # - 1.0 for remote job + remote candidate
+        # - 0.7 for same state
+        # - 0.3 for mismatch (penalty, not exclusion)
         if preferred_location:
-            location_set = await filter_candidates_by_location(preferred_location, db)
-            if location_set:
-                qualified_sets.append(location_set)
-            else:
-                logger.warning("No candidates in preferred location - returning empty set")
-                return set()
+            logger.info(f"📍 Location '{preferred_location}' will be scored, not filtered")
         
         # Intersection (AND logic)
         if not qualified_sets:

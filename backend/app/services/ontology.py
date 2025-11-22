@@ -1,9 +1,10 @@
 # backend/app/services/ontology.py
 """
 Ontology service for skills extraction and normalization.
+
 Uses spaCy NER + pattern matching + taxonomy for robust skills extraction.
 
-This service is critical for Days 5-8 ranking:
+Features:
 - Extracts skills from resume text
 - Normalizes skill names (synonyms, variants)
 - Enables ontology gating (must-have skills filter)
@@ -240,11 +241,12 @@ async def extract_skills_from_text(text: str, use_taxonomy: bool = True) -> List
                     if _is_likely_skill(candidate):
                         skills_set.add(candidate)
             
-            # Extract noun chunks (technical terms)
+            # Extract noun chunks with stricter filtering
             for chunk in doc.noun_chunks:
                 candidate = chunk.text.strip()
-                # Only short noun phrases (1-3 words)
-                if _is_likely_skill(candidate) and len(candidate.split()) <= 3:
+                word_count = len(candidate.split())
+                # Max 2 words, must pass skill check and contain tech term
+                if word_count <= 2 and _is_likely_skill(candidate) and _contains_tech_term(candidate):
                     skills_set.add(candidate)
         except Exception as e:
             # spaCy NER failed, but don't crash - continue with pattern matching
@@ -345,8 +347,39 @@ def _is_likely_skill(candidate: str) -> bool:
     }
     if candidate.lower() in blacklist:
         return False
-    
+
     return True
+
+
+def _contains_tech_term(candidate: str) -> bool:
+    """
+    Check if candidate contains likely technical terminology.
+
+    Prevents extracting generic phrases like 'the system' or 'best practices'.
+
+    Args:
+        candidate: Candidate skill name
+
+    Returns:
+        True if contains tech term, False otherwise
+    """
+    tech_indicators = {
+        # Programming related
+        'api', 'sdk', 'framework', 'library', 'database', 'server', 'client',
+        'backend', 'frontend', 'fullstack', 'devops', 'cloud', 'web', 'mobile',
+        # Specific technologies
+        'python', 'java', 'javascript', 'react', 'angular', 'vue', 'node',
+        'sql', 'nosql', 'aws', 'azure', 'gcp', 'docker', 'kubernetes',
+        'git', 'linux', 'windows', 'mac', 'ios', 'android',
+        # Data/ML
+        'machine', 'learning', 'deep', 'neural', 'data', 'analytics',
+        'tensorflow', 'pytorch', 'pandas', 'numpy', 'spark',
+        # General tech
+        'software', 'engineer', 'developer', 'programming', 'code', 'script',
+    }
+
+    words = candidate.lower().split()
+    return any(word in tech_indicators for word in words)
 
 
 def _normalize_skill_with_taxonomy(skill: str, taxonomy: Dict) -> Optional[str]:

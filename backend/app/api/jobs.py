@@ -1,9 +1,9 @@
 """
-Job ranking endpoints - implements SQL gating (Day 3).
-Vector search will be added in Days 5-8.
+Job ranking endpoints.
 
-DAY 3: SQL gating only
-FUTURE: Full semantic ranking pipeline
+Provides:
+- SQL gating (must-have skills, experience, location)
+- Full semantic ranking pipeline (dense retrieval, cross-encoder, structured scoring)
 """
 
 from fastapi import APIRouter, HTTPException, status, Depends

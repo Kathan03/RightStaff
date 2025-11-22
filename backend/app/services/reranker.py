@@ -60,12 +60,26 @@ class RerankerService:
                 for c in candidates
             ]
 
-            # Predict pairwise scores (higher = better match)
-            scores = self.model.predict(pairs)
+            # Predict raw logits (can be negative)
+            raw_scores = self.model.predict(pairs)
 
-            # Add scores to candidates
-            for candidate, score in zip(candidates, scores):
-                candidate['pairwise_score'] = float(score)
+            # Linear normalization to [0, 1] range
+            min_score = float(min(raw_scores))
+            max_score = float(max(raw_scores))
+
+            if max_score - min_score > 1e-6:
+                # Min-max scaling to [0, 1]
+                normalized_scores = [
+                    (float(score) - min_score) / (max_score - min_score)
+                    for score in raw_scores
+                ]
+            else:
+                # All scores equal - assign neutral 0.5
+                normalized_scores = [0.5] * len(raw_scores)
+
+            # Add normalized scores to candidates
+            for candidate, score in zip(candidates, normalized_scores):
+                candidate['pairwise_score'] = score
 
             # Sort by score descending
             ranked = sorted(
@@ -74,14 +88,17 @@ class RerankerService:
                 reverse=True
             )
 
-            logger.info(f"🔄 Re-ranked {len(candidates)} candidates, returning top {top_k}")
+            logger.info(
+                f"🔄 Re-ranked {len(candidates)} candidates "
+                f"(raw range: {min_score:.2f} to {max_score:.2f}, normalized to [0, 1])"
+            )
             return ranked[:top_k]
 
         except Exception as e:
             logger.error(f"❌ Re-ranking error: {e}")
-            # Return candidates with 0 scores on error
+            # Return candidates with neutral scores on error
             for candidate in candidates:
-                candidate['pairwise_score'] = 0.0
+                candidate['pairwise_score'] = 0.5
             return candidates[:top_k]
 
 

@@ -32,7 +32,7 @@ class EmbeddingService:
     - Free and open-source (no API costs)
     - Runs locally (no network latency)
     - Good quality for semantic search
-    - Same library provides cross-encoder for re-ranking (Day 9-10)
+    - Same library provides cross-encoder for re-ranking
     """
     
     def __init__(self):

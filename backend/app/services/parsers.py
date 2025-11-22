@@ -256,9 +256,9 @@ def extract_metadata(text: str) -> Dict[str, Any]:
     - Parse work experience (companies, titles, dates)
     - Calculate total years of experience
 
-    For now, returns empty structure (not needed for Day 2 pipeline).
+    Returns empty structure as metadata is extracted via LLM parser.
     """
-    logger.debug("extract_metadata not yet implemented (scheduled for Days 5-8)")
+    logger.debug("extract_metadata stub - metadata extracted via LLM parser")
     return {
         "name": None,
         "email": None,
