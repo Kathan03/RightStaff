@@ -537,6 +537,7 @@ from pydantic import UUID4
 class RankedCandidateResponse(BaseModel):
     """Response for a single ranked candidate."""
     candidate_id: str
+    full_name: str
     final_score: float
     band: str
     confidence: float
@@ -589,6 +590,7 @@ async def rank_candidates_full(
         ranked_candidates = [
             RankedCandidateResponse(
                 candidate_id=r.candidate_id,
+                full_name=r.full_name,
                 final_score=r.final_score,
                 band=r.band,
                 confidence=r.confidence,
