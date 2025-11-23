@@ -87,12 +87,12 @@ export const Chatbot: React.FC<ChatbotProps> = ({ jobId }) => {
   };
 
   return (
-    <div className="card h-[600px] flex flex-col">
-      <div className="flex items-center gap-3 mb-4 pb-4 border-b border-gray-200">
-        <MessageCircle className="w-6 h-6 text-primary-600" />
+    <div className="h-full flex flex-col bg-white">
+      <div className="flex items-center gap-3 p-4 pb-3 border-b border-gray-200">
+        <MessageCircle className="w-5 h-5 text-primary-600" />
         <div>
-          <h3 className="text-xl font-bold text-gray-900">AI Recruiter Assistant</h3>
-          <p className="text-sm text-gray-600">Ask questions about candidates</p>
+          <h3 className="text-lg font-bold text-gray-900">AI Recruiter Assistant</h3>
+          <p className="text-xs text-gray-600">Ask questions about candidates</p>
         </div>
       </div>
 
@@ -111,7 +111,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ jobId }) => {
       )}
 
       {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto space-y-4 mb-4 pr-2">
+      <div className="flex-1 overflow-y-auto space-y-4 p-4 pr-2">
         {messages.length === 0 && !connecting && (
           <div className="text-center py-8">
             <MessageCircle className="w-12 h-12 text-gray-300 mx-auto mb-3" />
@@ -158,7 +158,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ jobId }) => {
       </div>
 
       {/* Input Area */}
-      <div className="flex gap-2 pt-4 border-t border-gray-200">
+      <div className="flex gap-2 p-4 pt-3 border-t border-gray-200">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
