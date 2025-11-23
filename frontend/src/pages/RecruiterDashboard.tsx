@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { JobForm } from '../components/recruiter/JobForm';
 import { CandidateRanking } from '../components/recruiter/CandidateRanking';
-import { ChatbotWidget } from '../components/shared/ChatbotWidget';
+import { Chatbot } from '../components/recruiter/Chatbot';
 import { jobsApi } from '../api/jobs';
 import { useRecruiterStore } from '../store/recruiterStore';
 import { Loading } from '../components/shared/Loading';
@@ -259,32 +259,34 @@ export const RecruiterDashboard: React.FC = () => {
               </div>
             )}
 
-            <div>
-              {/* Tab Headers */}
-              <div className="flex gap-2 mb-4">
-                <button
-                  onClick={() => setDetailTab('rankings')}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
-                    detailTab === 'rankings'
-                      ? 'bg-primary-600 text-white'
-                      : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'
-                  }`}
-                >
-                  <Sparkles className="w-4 h-4" />
-                  AI Rankings ({rankedCandidates.length})
-                </button>
-                <button
-                  onClick={() => setDetailTab('applicants')}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
-                    detailTab === 'applicants'
-                      ? 'bg-primary-600 text-white'
-                      : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'
-                  }`}
-                >
-                  <Users className="w-4 h-4" />
-                  All Applicants ({applicants.length})
-                </button>
-              </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Left: Tabs for Rankings/Applicants */}
+              <div>
+                {/* Tab Headers */}
+                <div className="flex gap-2 mb-4">
+                  <button
+                    onClick={() => setDetailTab('rankings')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                      detailTab === 'rankings'
+                        ? 'bg-primary-600 text-white'
+                        : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'
+                    }`}
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    AI Rankings ({rankedCandidates.length})
+                  </button>
+                  <button
+                    onClick={() => setDetailTab('applicants')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                      detailTab === 'applicants'
+                        ? 'bg-primary-600 text-white'
+                        : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'
+                    }`}
+                  >
+                    <Users className="w-4 h-4" />
+                    All Applicants ({applicants.length})
+                  </button>
+                </div>
 
                 {/* Tab Content */}
                 {detailTab === 'rankings' && (
@@ -397,10 +399,13 @@ export const RecruiterDashboard: React.FC = () => {
                     )}
                   </>
                 )}
-            </div>
+              </div>
 
-            {/* Floating Chatbot Widget */}
-            <ChatbotWidget jobId={selectedJobId} />
+              {/* Right: Chatbot */}
+              <div>
+                <Chatbot jobId={selectedJobId} />
+              </div>
+            </div>
           </>
         )}
       </div>

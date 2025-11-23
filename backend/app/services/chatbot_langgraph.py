@@ -95,7 +95,7 @@ async def retrieve_context(state: ChatState) -> ChatState:
                     {"key": "candidate_id", "match": {"any": top_candidate_ids}}
                 ]
             },
-            limit=5
+            top_k=5
         )
 
         # Extract context
