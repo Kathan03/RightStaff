@@ -8,12 +8,15 @@ Primary Model: Qwen/Qwen2-1.5B-Instruct (with 4-bit quantization)
 Fallback Model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
 
 Why 4-bit Quantization?
-- Reduces memory from ~3GB to ~1GB
+- Reduces RAM usage from ~3GB to ~1GB during inference
 - Prevents Windows paging file errors (os error 1455)
 - Minimal accuracy loss for structured extraction
 
+IMPORTANT: Download size is still ~3GB (original model weights).
+Quantization reduces RAM usage AFTER loading, not download size.
+
 Why TinyLlama Fallback?
-- Even lighter: 1.1B parameters
+- Even lighter: 1.1B parameters (~2GB download, ~1GB RAM)
 - Sufficient for basic resume parsing
 - Works when quantization libraries fail
 """
@@ -115,7 +118,9 @@ class LLMResumeParser:
             if self.model is not None and self.tokenizer is not None:
                 return
 
-            logger.info(f"🔄 Loading LLM model: {self.model_name} (this may take 20-30 seconds)...")
+            logger.info(f"🔄 Loading LLM model: {self.model_name}")
+            logger.info("⏳ First load may take 2-5 minutes to download model (~2-3GB)")
+            logger.info("   Subsequent loads will be faster (cached locally)")
 
             # Run loading in thread pool to avoid blocking
             await asyncio.to_thread(self._load_model)
@@ -127,9 +132,9 @@ class LLMResumeParser:
         Load model and tokenizer with 4-bit quantization (runs in thread pool).
 
         Strategy:
-        1. Try 4-bit quantization with primary model (lowest memory)
-        2. If bitsandbytes unavailable, try FP16 with primary model
-        3. If OOM, fallback to TinyLlama with FP16
+        1. Try 4-bit quantization with primary model (lowest memory) - GPU only
+        2. If no GPU or bitsandbytes unavailable, try FP32 on CPU
+        3. If OOM, fallback to TinyLlama
         """
         torch, transformers = _import_dependencies()
         global _bitsandbytes
@@ -141,17 +146,32 @@ class LLMResumeParser:
         # Ensure cache directory exists
         cache_dir.mkdir(parents=True, exist_ok=True)
 
-        models_to_try = [
-            (self.model_name, True),   # Primary with quantization
-            (self.model_name, False),  # Primary without quantization
-            (fallback_model, False),   # Fallback model
-        ]
+        # Check if CUDA is available
+        has_cuda = torch.cuda.is_available()
+        logger.info(f"🖥️  CUDA available: {has_cuda}")
+
+        # Define models to try based on hardware
+        if has_cuda:
+            models_to_try = [
+                (self.model_name, True, True),    # Primary with quantization on GPU
+                (self.model_name, False, True),   # Primary FP16 on GPU
+                (fallback_model, False, True),    # Fallback on GPU
+                (fallback_model, False, False),   # Fallback on CPU
+            ]
+        else:
+            # CPU-only: Skip quantization (requires CUDA), use FP32
+            models_to_try = [
+                (fallback_model, False, False),   # TinyLlama on CPU first (lighter)
+                (self.model_name, False, False),  # Primary on CPU
+            ]
 
         last_error = None
 
-        for model_name, use_quantization in models_to_try:
+        for model_name, use_quantization, use_gpu in models_to_try:
             try:
-                logger.info(f"🔄 Attempting to load: {model_name} (quantized={use_quantization})")
+                device_info = "GPU" if use_gpu else "CPU"
+                quant_info = "4-bit" if use_quantization else "FP32" if not use_gpu else "FP16"
+                logger.info(f"🔄 Attempting to load: {model_name} ({quant_info} on {device_info})")
 
                 # Load tokenizer
                 self.tokenizer = transformers.AutoTokenizer.from_pretrained(
@@ -167,8 +187,9 @@ class LLMResumeParser:
                     "cache_dir": str(cache_dir),
                 }
 
-                # Try 4-bit quantization if available and requested
-                if use_quantization and _bitsandbytes and _bitsandbytes is not False:
+                # Configure based on hardware and quantization
+                if use_quantization and use_gpu and _bitsandbytes and _bitsandbytes is not False:
+                    # 4-bit quantization on GPU
                     try:
                         from transformers import BitsAndBytesConfig
 
@@ -186,10 +207,16 @@ class LLMResumeParser:
                         logger.warning(f"⚠️ Quantization setup failed: {quant_error}")
                         model_kwargs["torch_dtype"] = torch.float16
                         model_kwargs["device_map"] = "auto"
-                else:
-                    # Use FP16 without quantization
+
+                elif use_gpu:
+                    # FP16 on GPU
                     model_kwargs["torch_dtype"] = torch.float16
                     model_kwargs["device_map"] = "auto"
+
+                else:
+                    # FP32 on CPU - DO NOT use device_map="auto" (causes disk offload error)
+                    model_kwargs["torch_dtype"] = torch.float32
+                    # No device_map - loads directly to CPU
 
                 # Load model
                 self.model = transformers.AutoModelForCausalLM.from_pretrained(
@@ -197,11 +224,15 @@ class LLMResumeParser:
                     **model_kwargs
                 )
 
+                # Move to CPU explicitly if needed
+                if not use_gpu and hasattr(self.model, 'to'):
+                    self.model = self.model.to('cpu')
+
                 # Update model name if we switched to fallback
                 self.model_name = model_name
 
                 logger.info(f"✅ Model loaded successfully: {model_name}")
-                logger.info(f"   Device: {self.model.device}")
+                logger.info(f"   Device: {self.model.device if hasattr(self.model, 'device') else 'cpu'}")
                 logger.info(f"   Cache: {cache_dir}")
                 return  # Success!
 
@@ -210,8 +241,8 @@ class LLMResumeParser:
                 error_msg = str(e).lower()
 
                 # Check for memory-related errors
-                if "memory" in error_msg or "1455" in error_msg or "oom" in error_msg:
-                    logger.warning(f"⚠️ Memory error with {model_name}: {e}")
+                if "memory" in error_msg or "1455" in error_msg or "oom" in error_msg or "disk_offload" in error_msg:
+                    logger.warning(f"⚠️ Memory/offload error with {model_name}: {e}")
                 else:
                     logger.warning(f"⚠️ Failed to load {model_name}: {e}")
 
