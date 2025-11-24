@@ -8,7 +8,11 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from app.database import AsyncSessionLocal
-from app.models.candidate import Candidate, CandidateContact, CandidateResume, Skill, CandidateSkill, Job, Application, ApplicationStatus, JobStatus
+from app.models.candidate import (
+    Candidate, CandidateContact, CandidatePreference, CandidateDemographics,
+    CandidateResume, Skill, CandidateSkill, Job, Application, ApplicationStatus, JobStatus
+)
+import random
 from app.services.embeddings import embedding_service
 from app.services.vector_store import vector_store
 from app.services.s3_client import s3_client
@@ -339,6 +343,43 @@ DUMMY_CANDIDATES = [
     }
 ]
 
+# Mock data options for randomization
+WORK_AUTHORIZATIONS = ["US Citizen", "Green Card", "H1B", "OPT", "L1", "TN Visa"]
+WORK_ARRANGEMENTS = ["Remote", "Hybrid", "On-site"]
+RELOCATE_OPTIONS = ["Yes", "No", "Yes - within US", "Yes - anywhere", "Open to discussion"]
+ETHNICITIES = ["Asian", "Black or African American", "Hispanic or Latino", "White", "Two or more races", "Prefer not to say"]
+DISABILITY_OPTIONS = ["No", "Yes", "Prefer not to say"]
+VETERAN_OPTIONS = ["No", "Yes - Active Duty", "Yes - Veteran", "Yes - Reserve", "Prefer not to say"]
+
+
+def generate_mock_preference(years_exp: float) -> dict:
+    """Generate realistic mock preference data based on experience level."""
+    # Higher experience = higher salary expectations
+    base_salary = 60000 + (years_exp * 8000)
+    salary_min = int(base_salary * 0.9)
+    salary_max = int(base_salary * 1.3)
+
+    return {
+        "work_authorization": random.choice(WORK_AUTHORIZATIONS),
+        "work_arrangement": random.choice(WORK_ARRANGEMENTS),
+        "willing_to_relocate": random.choice(RELOCATE_OPTIONS),
+        "desired_salary_min": salary_min,
+        "desired_salary_max": salary_max,
+        "salary_currency": "USD",
+        "salary_period": "year",
+        "availability_start": random.choice(["Immediately", "2 weeks", "1 month", "Negotiable"]),
+        "open_to_remote": random.choice([True, False, True, True])  # 75% prefer remote
+    }
+
+
+def generate_mock_demographics() -> dict:
+    """Generate mock demographic data for testing queries."""
+    return {
+        "disability": random.choice(DISABILITY_OPTIONS),
+        "ethnicity": random.choice(ETHNICITIES),
+        "veteran_status": random.choice(VETERAN_OPTIONS)
+    }
+
 
 async def create_jobs(db):
     """Create job postings in database (skip if already exists)."""
@@ -500,6 +541,32 @@ async def create_candidates(db, skill_objects):
             country=contact_data.get("country")
         )
         db.add(contact)
+
+        # Add preferences (mock data)
+        pref_data = generate_mock_preference(cand_data["years_experience"])
+        preference = CandidatePreference(
+            candidate_id=candidate_id,
+            work_authorization=pref_data["work_authorization"],
+            work_arrangement=pref_data["work_arrangement"],
+            willing_to_relocate=pref_data["willing_to_relocate"],
+            desired_salary_min=pref_data["desired_salary_min"],
+            desired_salary_max=pref_data["desired_salary_max"],
+            salary_currency=pref_data["salary_currency"],
+            salary_period=pref_data["salary_period"],
+            availability_start=pref_data["availability_start"],
+            open_to_remote=pref_data["open_to_remote"]
+        )
+        db.add(preference)
+
+        # Add demographics (mock data)
+        demo_data = generate_mock_demographics()
+        demographics = CandidateDemographics(
+            candidate_id=candidate_id,
+            disability=demo_data["disability"],
+            ethnicity=demo_data["ethnicity"],
+            veteran_status=demo_data["veteran_status"]
+        )
+        db.add(demographics)
 
         # Add skills
         for skill_data in cand_data["skills"]:

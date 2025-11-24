@@ -60,6 +60,16 @@ class Settings(BaseSettings):
         env="LLM_PARSER_MODEL",
         description="HuggingFace model for resume field extraction (Qwen is smaller and faster)"
     )
+    llm_fallback_model: str = Field(
+        default="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+        env="LLM_FALLBACK_MODEL",
+        description="Fallback model when primary fails due to memory constraints"
+    )
+    model_cache_dir: str = Field(
+        default="./model_cache",
+        env="MODEL_CACHE_DIR",
+        description="Directory for caching downloaded models to prevent re-downloading"
+    )
 
     # Text Processing
     chunk_size: int = Field(default=400, env="CHUNK_SIZE", ge=50, le=2000)
