@@ -1,21 +1,21 @@
 """
-LLM-based resume parser with 4-bit quantization for memory efficiency.
+LLM-based resume parser optimized for low-resource systems.
 
 REPLACES: Regex-based extraction (extract_name, extract_email, etc.)
 KEEPS: Unstructured library for PDF/DOCX parsing
 
-Primary Model: Qwen/Qwen2-1.5B-Instruct (with 4-bit quantization)
-Fallback Model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+Primary Model: Qwen/Qwen2.5-0.5B-Instruct
+- 0.5B parameters (~1GB download, ~2GB RAM FP32)
+- Best balance of quality and speed for resume parsing
+- Supports GPU (FP16) and CPU (FP32) inference
 
-Why 4-bit Quantization?
-- Reduces memory from ~3GB to ~1GB
-- Prevents Windows paging file errors (os error 1455)
-- Minimal accuracy loss for structured extraction
+Fallback Model: HuggingFaceTB/SmolLM-135M-Instruct
+- 135M parameters (~300MB download, ~600MB RAM)
+- Ultra-lightweight for systems with limited memory
+- Works when primary model fails due to OOM
 
-Why TinyLlama Fallback?
-- Even lighter: 1.1B parameters
-- Sufficient for basic resume parsing
-- Works when quantization libraries fail
+PRE-DOWNLOAD MODELS:
+Run `python download_model.py` to pre-download models for instant inference.
 """
 
 import asyncio
@@ -80,11 +80,11 @@ class LLMResumeParser:
     """
     Lightweight LLM for resume field extraction.
 
-    Uses microsoft/Phi-3-mini-4k-instruct for structured field extraction.
+    Uses Qwen/Qwen2.5-0.5B-Instruct for structured field extraction.
     All methods are async to prevent blocking the event loop.
     """
 
-    def __init__(self, model_name: str = "microsoft/Phi-3-mini-4k-instruct"):
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"):
         """
         Initialize LLM parser (lazy loading).
 
@@ -115,7 +115,10 @@ class LLMResumeParser:
             if self.model is not None and self.tokenizer is not None:
                 return
 
-            logger.info(f"🔄 Loading LLM model: {self.model_name} (this may take 20-30 seconds)...")
+            logger.info(f"🔄 Loading LLM model: {self.model_name}")
+            logger.info("⏳ First load may take 30-60 seconds to download model (~1GB)")
+            logger.info("   Subsequent loads will be faster (cached locally)")
+            logger.info("   Tip: Run 'python download_model.py' to pre-download")
 
             # Run loading in thread pool to avoid blocking
             await asyncio.to_thread(self._load_model)
@@ -124,12 +127,12 @@ class LLMResumeParser:
 
     def _load_model(self):
         """
-        Load model and tokenizer with 4-bit quantization (runs in thread pool).
+        Load model and tokenizer (runs in thread pool).
 
         Strategy:
-        1. Try 4-bit quantization with primary model (lowest memory)
-        2. If bitsandbytes unavailable, try FP16 with primary model
-        3. If OOM, fallback to TinyLlama with FP16
+        1. GPU: Try primary model (Qwen2.5-0.5B) with FP16, then fallback (SmolLM-135M)
+        2. CPU: Try primary model with FP32, then fallback model
+        3. 4-bit quantization is optional for GPU (only if bitsandbytes available)
         """
         torch, transformers = _import_dependencies()
         global _bitsandbytes
@@ -141,17 +144,32 @@ class LLMResumeParser:
         # Ensure cache directory exists
         cache_dir.mkdir(parents=True, exist_ok=True)
 
-        models_to_try = [
-            (self.model_name, True),   # Primary with quantization
-            (self.model_name, False),  # Primary without quantization
-            (fallback_model, False),   # Fallback model
-        ]
+        # Check if CUDA is available
+        has_cuda = torch.cuda.is_available()
+        logger.info(f"🖥️  CUDA available: {has_cuda}")
+
+        # Define models to try based on hardware
+        if has_cuda:
+            models_to_try = [
+                (self.model_name, True, True),    # Primary with quantization on GPU
+                (self.model_name, False, True),   # Primary FP16 on GPU
+                (fallback_model, False, True),    # Fallback (SmolLM) on GPU
+                (fallback_model, False, False),   # Fallback (SmolLM) on CPU
+            ]
+        else:
+            # CPU-only: Skip quantization (requires CUDA), use FP32
+            models_to_try = [
+                (self.model_name, False, False),  # Primary (Qwen2.5-0.5B) on CPU
+                (fallback_model, False, False),   # Fallback (SmolLM-135M) on CPU
+            ]
 
         last_error = None
 
-        for model_name, use_quantization in models_to_try:
+        for model_name, use_quantization, use_gpu in models_to_try:
             try:
-                logger.info(f"🔄 Attempting to load: {model_name} (quantized={use_quantization})")
+                device_info = "GPU" if use_gpu else "CPU"
+                quant_info = "4-bit" if use_quantization else "FP32" if not use_gpu else "FP16"
+                logger.info(f"🔄 Attempting to load: {model_name} ({quant_info} on {device_info})")
 
                 # Load tokenizer
                 self.tokenizer = transformers.AutoTokenizer.from_pretrained(
@@ -167,8 +185,9 @@ class LLMResumeParser:
                     "cache_dir": str(cache_dir),
                 }
 
-                # Try 4-bit quantization if available and requested
-                if use_quantization and _bitsandbytes and _bitsandbytes is not False:
+                # Configure based on hardware and quantization
+                if use_quantization and use_gpu and _bitsandbytes and _bitsandbytes is not False:
+                    # 4-bit quantization on GPU
                     try:
                         from transformers import BitsAndBytesConfig
 
@@ -186,10 +205,16 @@ class LLMResumeParser:
                         logger.warning(f"⚠️ Quantization setup failed: {quant_error}")
                         model_kwargs["torch_dtype"] = torch.float16
                         model_kwargs["device_map"] = "auto"
-                else:
-                    # Use FP16 without quantization
+
+                elif use_gpu:
+                    # FP16 on GPU
                     model_kwargs["torch_dtype"] = torch.float16
                     model_kwargs["device_map"] = "auto"
+
+                else:
+                    # FP32 on CPU - DO NOT use device_map="auto" (causes disk offload error)
+                    model_kwargs["torch_dtype"] = torch.float32
+                    # No device_map - loads directly to CPU
 
                 # Load model
                 self.model = transformers.AutoModelForCausalLM.from_pretrained(
@@ -197,11 +222,15 @@ class LLMResumeParser:
                     **model_kwargs
                 )
 
+                # Move to CPU explicitly if needed
+                if not use_gpu and hasattr(self.model, 'to'):
+                    self.model = self.model.to('cpu')
+
                 # Update model name if we switched to fallback
                 self.model_name = model_name
 
                 logger.info(f"✅ Model loaded successfully: {model_name}")
-                logger.info(f"   Device: {self.model.device}")
+                logger.info(f"   Device: {self.model.device if hasattr(self.model, 'device') else 'cpu'}")
                 logger.info(f"   Cache: {cache_dir}")
                 return  # Success!
 
@@ -210,8 +239,8 @@ class LLMResumeParser:
                 error_msg = str(e).lower()
 
                 # Check for memory-related errors
-                if "memory" in error_msg or "1455" in error_msg or "oom" in error_msg:
-                    logger.warning(f"⚠️ Memory error with {model_name}: {e}")
+                if "memory" in error_msg or "1455" in error_msg or "oom" in error_msg or "disk_offload" in error_msg:
+                    logger.warning(f"⚠️ Memory/offload error with {model_name}: {e}")
                 else:
                     logger.warning(f"⚠️ Failed to load {model_name}: {e}")
 
@@ -473,7 +502,7 @@ def get_llm_parser() -> LLMResumeParser:
     Get or create singleton LLM parser instance.
 
     Model loading is deferred until first parse_resume() call.
-    Uses model name from settings (default: Qwen/Qwen2-1.5B-Instruct).
+    Uses model name from settings (default: Qwen/Qwen2.5-0.5B-Instruct).
     """
     global _llm_parser_instance
 

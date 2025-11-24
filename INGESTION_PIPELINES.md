@@ -1881,7 +1881,7 @@ All pipelines respect the `USE_LLM_PARSING` setting:
 ```bash
 # In .env or environment
 USE_LLM_PARSING=true
-LLM_PARSER_MODEL=Qwen/Qwen2-1.5B-Instruct
+LLM_PARSER_MODEL=Qwen/Qwen2.5-0.5B-Instruct
 ```
 
 **Disable LLM Parsing (Default):**

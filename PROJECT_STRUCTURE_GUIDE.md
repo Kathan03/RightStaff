@@ -1331,7 +1331,7 @@ ingestion.py -> extract_skills(text, method="hybrid")
 - **JSON Schema**: Uses JSON schema to ensure consistent output format
 
 **Main functionalities:**
-1. Parses entire resume using local LLM (Qwen2-1.5B)
+1. Parses entire resume using local LLM (Qwen2.5-0.5B - lightweight 500M parameter model)
 2. Extracts: full_name, email, phone, location, years_experience, professional_summary, skills
 3. Returns structured dictionary with all extracted fields
 
