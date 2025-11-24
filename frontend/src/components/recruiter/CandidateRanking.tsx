@@ -85,7 +85,7 @@ export const CandidateRanking: React.FC<CandidateRankingProps> = ({
                 </div>
                 <div>
                   <h4 className="text-lg font-semibold text-gray-900">
-                    Candidate {candidate.candidate_id.slice(0, 8)}
+                    {candidate.full_name || `Candidate ${candidate.candidate_id.slice(0, 8)}`}
                   </h4>
                   <div
                     className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium border ${getBandColor(
