@@ -774,11 +774,12 @@ WebSocket /chat/{job_id}
 
 #### **LLMResumeParser** (`services/llm_parser.py`)
 - **Purpose**: LLM-based field extraction from resumes
-- **Model**: `microsoft/Phi-3-mini-4k-instruct` (3.8B params)
+- **Model**: `Qwen/Qwen2.5-0.5B-Instruct` (0.5B params, ~1GB download)
+- **Fallback**: `HuggingFaceTB/SmolLM-135M-Instruct` (135M params)
 - **Key Methods**:
-  - `extract_fields()`: Parse name, email, phone, location, etc.
-  - `extract_experience()`: Get years of experience
-- **Features**: Lazy loading, async support, graceful fallback
+  - `parse_resume()`: Extract all fields from resume text
+  - `_clean_*()`: Validate and clean extracted data
+- **Features**: Lazy loading, async support, graceful fallback, pre-download script
 
 #### **CandidateChatbot** (`services/chatbot_langgraph.py`)
 - **Purpose**: RAG-powered chatbot with EEOC guardrails

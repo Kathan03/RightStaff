@@ -517,71 +517,77 @@ async def create_candidates(db, skill_objects):
             print(f"   ℹ️  {i}/{len(DUMMY_CANDIDATES)}: {cand_data['full_name']} (already exists)")
             continue
 
-        # Create candidate
-        candidate_id = uuid.uuid4()
-        candidate = Candidate(
-            id=candidate_id,
-            full_name=cand_data["full_name"],
-            years_experience=cand_data["years_experience"],
-            professional_summary=cand_data["professional_summary"],
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
-        db.add(candidate)
-        candidate_ids.append(candidate_id)
+        try:
+            # Create candidate
+            candidate_id = uuid.uuid4()
+            candidate = Candidate(
+                id=candidate_id,
+                full_name=cand_data["full_name"],
+                years_experience=cand_data["years_experience"],
+                professional_summary=cand_data["professional_summary"],
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            )
+            db.add(candidate)
+            candidate_ids.append(candidate_id)
 
-        # Add contact
-        contact_data = cand_data["contact"]
-        contact = CandidateContact(
-            candidate_id=candidate_id,
-            email=contact_data["email"],
-            phone=contact_data.get("phone"),
-            city=contact_data.get("city"),
-            region=contact_data.get("region"),
-            country=contact_data.get("country")
-        )
-        db.add(contact)
+            # Add contact
+            contact_data = cand_data["contact"]
+            contact = CandidateContact(
+                candidate_id=candidate_id,
+                email=contact_data["email"],
+                phone=contact_data.get("phone"),
+                city=contact_data.get("city"),
+                region=contact_data.get("region"),
+                country=contact_data.get("country")
+            )
+            db.add(contact)
 
-        # Add preferences (mock data)
-        pref_data = generate_mock_preference(cand_data["years_experience"])
-        preference = CandidatePreference(
-            candidate_id=candidate_id,
-            work_authorization=pref_data["work_authorization"],
-            work_arrangement=pref_data["work_arrangement"],
-            willing_to_relocate=pref_data["willing_to_relocate"],
-            desired_salary_min=pref_data["desired_salary_min"],
-            desired_salary_max=pref_data["desired_salary_max"],
-            salary_currency=pref_data["salary_currency"],
-            salary_period=pref_data["salary_period"],
-            availability_start=pref_data["availability_start"],
-            open_to_remote=pref_data["open_to_remote"]
-        )
-        db.add(preference)
+            # Add preferences (mock data)
+            pref_data = generate_mock_preference(cand_data["years_experience"])
+            preference = CandidatePreference(
+                candidate_id=candidate_id,
+                work_authorization=pref_data["work_authorization"],
+                work_arrangement=pref_data["work_arrangement"],
+                willing_to_relocate=pref_data["willing_to_relocate"],
+                desired_salary_min=pref_data["desired_salary_min"],
+                desired_salary_max=pref_data["desired_salary_max"],
+                salary_currency=pref_data["salary_currency"],
+                salary_period=pref_data["salary_period"],
+                availability_start=pref_data["availability_start"],
+                open_to_remote=pref_data["open_to_remote"]
+            )
+            db.add(preference)
 
-        # Add demographics (mock data)
-        demo_data = generate_mock_demographics()
-        demographics = CandidateDemographics(
-            candidate_id=candidate_id,
-            disability=demo_data["disability"],
-            ethnicity=demo_data["ethnicity"],
-            veteran_status=demo_data["veteran_status"]
-        )
-        db.add(demographics)
+            # Add demographics (mock data)
+            demo_data = generate_mock_demographics()
+            demographics = CandidateDemographics(
+                candidate_id=candidate_id,
+                disability=demo_data["disability"],
+                ethnicity=demo_data["ethnicity"],
+                veteran_status=demo_data["veteran_status"]
+            )
+            db.add(demographics)
 
-        # Add skills
-        for skill_data in cand_data["skills"]:
-            skill_name = skill_data["name"]
-            if skill_name in skill_objects:
-                candidate_skill = CandidateSkill(
-                    candidate_id=candidate_id,
-                    skill_id=skill_objects[skill_name].id,
-                    level=skill_data["level"],
-                    years=skill_data["years"]
-                )
-                db.add(candidate_skill)
+            # Add skills
+            for skill_data in cand_data["skills"]:
+                skill_name = skill_data["name"]
+                if skill_name in skill_objects:
+                    candidate_skill = CandidateSkill(
+                        candidate_id=candidate_id,
+                        skill_id=skill_objects[skill_name].id,
+                        level=skill_data["level"],
+                        years=skill_data["years"]
+                    )
+                    db.add(candidate_skill)
 
-        print(f"   ✅ {i}/{len(DUMMY_CANDIDATES)}: {cand_data['full_name']}")
-        new_candidates_count += 1
+            print(f"   ✅ {i}/{len(DUMMY_CANDIDATES)}: {cand_data['full_name']}")
+            new_candidates_count += 1
+
+        except Exception as e:
+            print(f"   ❌ Failed to create {cand_data['full_name']}: {str(e)}")
+            await db.rollback()
+            raise  # Re-raise to stop and show full error
 
     if new_candidates_count > 0:
         await db.commit()

@@ -69,7 +69,14 @@ class CandidatePreference(Base):
         UUID(as_uuid=True), ForeignKey("rightstaff.candidate.id", ondelete="CASCADE"), primary_key=True
     )
     work_authorization = Column(Text)  # US Citizen, Green Card, H1B, OPT, etc.
-    work_arrangement = Column(String)  # Remote, Hybrid, On-site
+    work_arrangement = Column(
+        SQLEnum(
+            'Remote', 'Hybrid', 'On-site',
+            schema="rightstaff",
+            name="work_arrangement_enum"
+        ),
+        nullable=True
+    )  # Remote, Hybrid, On-site
     willing_to_relocate = Column(Text)  # Yes, No, or specific locations
     desired_salary_min = Column(Numeric(12, 2))
     desired_salary_max = Column(Numeric(12, 2))
@@ -148,6 +155,14 @@ class CandidateSkill(Base):
 # ========================================
 # NEW: Job Model
 # ========================================
+
+
+class WorkArrangement(str, enum.Enum):
+    """Work arrangement enumeration - matches database work_arrangement_enum."""
+
+    remote = "Remote"
+    hybrid = "Hybrid"
+    onsite = "On-site"
 
 
 class JobStatus(str, enum.Enum):

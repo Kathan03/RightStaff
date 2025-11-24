@@ -56,14 +56,14 @@ class Settings(BaseSettings):
         description="Enable LLM-based resume parsing. Falls back to regex if disabled or on error."
     )
     llm_parser_model: str = Field(
-        default="Qwen/Qwen2-1.5B-Instruct",  # Smaller model for lower RAM usage
+        default="Qwen/Qwen2.5-0.5B-Instruct",  # 0.5B params, ~1GB download, ~2GB RAM
         env="LLM_PARSER_MODEL",
-        description="HuggingFace model for resume field extraction (Qwen is smaller and faster)"
+        description="HuggingFace model for resume field extraction (Qwen2.5-0.5B is lightweight and fast)"
     )
     llm_fallback_model: str = Field(
-        default="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+        default="HuggingFaceTB/SmolLM-135M-Instruct",  # 135M params, ~300MB download
         env="LLM_FALLBACK_MODEL",
-        description="Fallback model when primary fails due to memory constraints"
+        description="Ultra-lightweight fallback model when primary fails due to memory constraints"
     )
     model_cache_dir: str = Field(
         default="./model_cache",
