@@ -31,6 +31,8 @@ class Candidate(Base):
 
     # Relationships (for eager loading with joins)
     contact = relationship("CandidateContact", back_populates="candidate", uselist=False)
+    preference = relationship("CandidatePreference", back_populates="candidate", uselist=False)
+    demographics = relationship("CandidateDemographics", back_populates="candidate", uselist=False)
     resumes = relationship("CandidateResume", back_populates="candidate")
     skills = relationship("CandidateSkill", back_populates="candidate")
     applications = relationship("Application", back_populates="candidate")
@@ -55,6 +57,45 @@ class CandidateContact(Base):
     country = Column(String)
 
     candidate = relationship("Candidate", back_populates="contact")
+
+
+class CandidatePreference(Base):
+    """Candidate work preferences and requirements."""
+
+    __tablename__ = "candidate_preference"
+    __table_args__ = {"schema": "rightstaff"}
+
+    candidate_id = Column(
+        UUID(as_uuid=True), ForeignKey("rightstaff.candidate.id", ondelete="CASCADE"), primary_key=True
+    )
+    work_authorization = Column(Text)  # US Citizen, Green Card, H1B, OPT, etc.
+    work_arrangement = Column(String)  # Remote, Hybrid, On-site
+    willing_to_relocate = Column(Text)  # Yes, No, or specific locations
+    desired_salary_min = Column(Numeric(12, 2))
+    desired_salary_max = Column(Numeric(12, 2))
+    salary_currency = Column(String(3), default='USD')
+    salary_period = Column(Text, default='year')  # year, hour, etc.
+    availability_start = Column(Text)  # When can they start
+    open_to_remote = Column(Boolean)
+
+    candidate = relationship("Candidate", back_populates="preference")
+
+
+class CandidateDemographics(Base):
+    """Candidate demographic information (EEO/sensitive data)."""
+
+    __tablename__ = "candidate_demographics"
+    __table_args__ = {"schema": "rightstaff"}
+
+    candidate_id = Column(
+        UUID(as_uuid=True), ForeignKey("rightstaff.candidate.id", ondelete="CASCADE"), primary_key=True
+    )
+    disability = Column(Text)  # Yes, No, or description
+    ethnicity = Column(Text)
+    veteran_status = Column(Text)  # Yes, No, or type
+    collected_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    candidate = relationship("Candidate", back_populates="demographics")
 
 
 class CandidateResume(Base):

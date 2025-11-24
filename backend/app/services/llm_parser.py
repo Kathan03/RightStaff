@@ -1,34 +1,54 @@
 """
-LLM-based resume parser using Phi-3-Mini for accurate field extraction.
+LLM-based resume parser with 4-bit quantization for memory efficiency.
 
 REPLACES: Regex-based extraction (extract_name, extract_email, etc.)
 KEEPS: Unstructured library for PDF/DOCX parsing
 
-Why Phi-3-Mini?
-- Small: 3.8B parameters (~8GB RAM)
-- Fast: 50-100 tokens/sec on CPU
-- Accurate: 85-90% for structured extraction
-- Runs on: CPU (no GPU needed)
-- Better than: spaCy NER + regex for names, skills, experience
+Primary Model: Qwen/Qwen2-1.5B-Instruct (with 4-bit quantization)
+Fallback Model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+
+Why 4-bit Quantization?
+- Reduces memory from ~3GB to ~1GB
+- Prevents Windows paging file errors (os error 1455)
+- Minimal accuracy loss for structured extraction
+
+Why TinyLlama Fallback?
+- Even lighter: 1.1B parameters
+- Sufficient for basic resume parsing
+- Works when quantization libraries fail
 """
 
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import Dict, Optional
 from datetime import datetime
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 # Lazy imports (only load when needed)
 _torch = None
 _transformers = None
+_bitsandbytes = None
+
+# These will be loaded from settings when needed
+def _get_fallback_model():
+    """Get fallback model from settings."""
+    from app.config import settings
+    return settings.llm_fallback_model
+
+def _get_cache_dir():
+    """Get model cache directory from settings."""
+    from app.config import settings
+    return Path(settings.model_cache_dir)
 
 
 def _import_dependencies():
     """Lazy import of heavy dependencies."""
-    global _torch, _transformers
+    global _torch, _transformers, _bitsandbytes
 
     if _torch is None or _transformers is None:
         try:
@@ -42,6 +62,16 @@ def _import_dependencies():
             raise ImportError(
                 "Missing dependencies. Install with: pip install torch transformers accelerate"
             ) from e
+
+    # Try to import bitsandbytes for quantization (optional)
+    if _bitsandbytes is None:
+        try:
+            import bitsandbytes as bnb
+            _bitsandbytes = bnb
+            logger.info("✅ Loaded bitsandbytes for 4-bit quantization")
+        except ImportError:
+            logger.warning("⚠️ bitsandbytes not available - will use fallback model or FP16")
+            _bitsandbytes = False  # Mark as attempted but failed
 
     return _torch, _transformers
 
@@ -94,33 +124,105 @@ class LLMResumeParser:
 
     def _load_model(self):
         """
-        Load model and tokenizer (runs in thread pool).
+        Load model and tokenizer with 4-bit quantization (runs in thread pool).
 
-        This is a synchronous method that runs in a separate thread.
+        Strategy:
+        1. Try 4-bit quantization with primary model (lowest memory)
+        2. If bitsandbytes unavailable, try FP16 with primary model
+        3. If OOM, fallback to TinyLlama with FP16
         """
         torch, transformers = _import_dependencies()
+        global _bitsandbytes
 
-        try:
-            # Load tokenizer
-            self.tokenizer = transformers.AutoTokenizer.from_pretrained(
-                self.model_name,
-                trust_remote_code=True
-            )
+        # Get settings
+        cache_dir = _get_cache_dir()
+        fallback_model = _get_fallback_model()
 
-            # Load model with float16 for efficiency
-            self.model = transformers.AutoModelForCausalLM.from_pretrained(
-                self.model_name,
-                torch_dtype=torch.float16,
-                device_map="auto",  # Auto CPU/GPU placement
-                trust_remote_code=True,
-                low_cpu_mem_usage=True
-            )
+        # Ensure cache directory exists
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
-            logger.info(f"✅ Model loaded on device: {self.model.device}")
+        models_to_try = [
+            (self.model_name, True),   # Primary with quantization
+            (self.model_name, False),  # Primary without quantization
+            (fallback_model, False),   # Fallback model
+        ]
 
-        except Exception as e:
-            logger.error(f"❌ Failed to load LLM model: {e}")
-            raise
+        last_error = None
+
+        for model_name, use_quantization in models_to_try:
+            try:
+                logger.info(f"🔄 Attempting to load: {model_name} (quantized={use_quantization})")
+
+                # Load tokenizer
+                self.tokenizer = transformers.AutoTokenizer.from_pretrained(
+                    model_name,
+                    trust_remote_code=True,
+                    cache_dir=str(cache_dir)
+                )
+
+                # Prepare model loading kwargs
+                model_kwargs = {
+                    "trust_remote_code": True,
+                    "low_cpu_mem_usage": True,
+                    "cache_dir": str(cache_dir),
+                }
+
+                # Try 4-bit quantization if available and requested
+                if use_quantization and _bitsandbytes and _bitsandbytes is not False:
+                    try:
+                        from transformers import BitsAndBytesConfig
+
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_4bit=True,
+                            bnb_4bit_compute_dtype=torch.float16,
+                            bnb_4bit_quant_type="nf4",
+                            bnb_4bit_use_double_quant=True,
+                        )
+                        model_kwargs["quantization_config"] = quantization_config
+                        model_kwargs["device_map"] = "auto"
+                        logger.info("📦 Using 4-bit quantization (bitsandbytes)")
+
+                    except Exception as quant_error:
+                        logger.warning(f"⚠️ Quantization setup failed: {quant_error}")
+                        model_kwargs["torch_dtype"] = torch.float16
+                        model_kwargs["device_map"] = "auto"
+                else:
+                    # Use FP16 without quantization
+                    model_kwargs["torch_dtype"] = torch.float16
+                    model_kwargs["device_map"] = "auto"
+
+                # Load model
+                self.model = transformers.AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    **model_kwargs
+                )
+
+                # Update model name if we switched to fallback
+                self.model_name = model_name
+
+                logger.info(f"✅ Model loaded successfully: {model_name}")
+                logger.info(f"   Device: {self.model.device}")
+                logger.info(f"   Cache: {cache_dir}")
+                return  # Success!
+
+            except Exception as e:
+                last_error = e
+                error_msg = str(e).lower()
+
+                # Check for memory-related errors
+                if "memory" in error_msg or "1455" in error_msg or "oom" in error_msg:
+                    logger.warning(f"⚠️ Memory error with {model_name}: {e}")
+                else:
+                    logger.warning(f"⚠️ Failed to load {model_name}: {e}")
+
+                continue  # Try next model
+
+        # All attempts failed
+        logger.error(f"❌ All model loading attempts failed. Last error: {last_error}")
+        raise RuntimeError(
+            f"Failed to load any LLM model. Tried: {[m[0] for m in models_to_try]}. "
+            f"Last error: {last_error}"
+        )
 
     async def parse_resume(self, resume_text: str) -> Dict:
         """

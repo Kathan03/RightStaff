@@ -15,7 +15,56 @@ const schema = z.object({
   years_experience: z.number().min(0).max(50).optional(),
   professional_summary: z.string().min(20, 'Summary must be at least 20 characters').optional(),
   skills_str: z.string().min(1, 'At least one skill required'),
+  // New fields for preferences
+  work_authorization: z.string().optional(),
+  work_arrangement: z.string().optional(),
+  willing_to_relocate: z.string().optional(),
+  open_to_remote: z.boolean().optional(),
+  // Demographics (optional, for EEO)
+  disability: z.string().optional(),
+  veteran_status: z.string().optional(),
 });
+
+// Options for dropdowns
+const WORK_AUTHORIZATION_OPTIONS = [
+  { value: '', label: 'Select...' },
+  { value: 'US Citizen', label: 'US Citizen' },
+  { value: 'Green Card', label: 'Green Card / Permanent Resident' },
+  { value: 'H1B', label: 'H1B Visa' },
+  { value: 'OPT', label: 'OPT / STEM OPT' },
+  { value: 'L1', label: 'L1 Visa' },
+  { value: 'TN Visa', label: 'TN Visa' },
+  { value: 'Other', label: 'Other Work Authorization' },
+];
+
+const WORK_ARRANGEMENT_OPTIONS = [
+  { value: '', label: 'Select...' },
+  { value: 'Remote', label: 'Remote' },
+  { value: 'Hybrid', label: 'Hybrid' },
+  { value: 'On-site', label: 'On-site' },
+];
+
+const RELOCATE_OPTIONS = [
+  { value: '', label: 'Select...' },
+  { value: 'Yes', label: 'Yes' },
+  { value: 'No', label: 'No' },
+  { value: 'Yes - within US', label: 'Yes - within US' },
+  { value: 'Open to discussion', label: 'Open to discussion' },
+];
+
+const DISABILITY_OPTIONS = [
+  { value: '', label: 'Prefer not to say' },
+  { value: 'No', label: 'No' },
+  { value: 'Yes', label: 'Yes' },
+];
+
+const VETERAN_OPTIONS = [
+  { value: '', label: 'Prefer not to say' },
+  { value: 'No', label: 'No' },
+  { value: 'Yes - Veteran', label: 'Yes - Veteran' },
+  { value: 'Yes - Active Duty', label: 'Yes - Active Duty' },
+  { value: 'Yes - Reserve', label: 'Yes - Reserve/National Guard' },
+];
 
 type FormData = z.infer<typeof schema>;
 
@@ -173,6 +222,97 @@ export const CandidateForm: React.FC<CandidateFormProps> = ({ onSuccess }) => {
           {errors.skills_str && (
             <p className="text-red-600 text-sm mt-1">{errors.skills_str.message}</p>
           )}
+        </div>
+
+        {/* Work Preferences Section */}
+        <div className="border-t pt-6 mt-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Work Preferences</h3>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Work Authorization */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Work Authorization
+              </label>
+              <select {...register('work_authorization')} className="input-field">
+                {WORK_AUTHORIZATION_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Work Arrangement */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Preferred Work Arrangement
+              </label>
+              <select {...register('work_arrangement')} className="input-field">
+                {WORK_ARRANGEMENT_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Willing to Relocate */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Willing to Relocate
+              </label>
+              <select {...register('willing_to_relocate')} className="input-field">
+                {RELOCATE_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Open to Remote */}
+            <div className="flex items-center pt-6">
+              <input
+                {...register('open_to_remote')}
+                type="checkbox"
+                className="h-4 w-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+              />
+              <label className="ml-2 block text-sm text-gray-700">
+                Open to remote opportunities
+              </label>
+            </div>
+          </div>
+        </div>
+
+        {/* Demographics Section (Optional) */}
+        <div className="border-t pt-6 mt-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">
+            Voluntary Self-Identification
+          </h3>
+          <p className="text-sm text-gray-500 mb-4">
+            This information is optional and used for equal opportunity reporting only.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Disability Status */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Disability Status
+              </label>
+              <select {...register('disability')} className="input-field">
+                {DISABILITY_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Veteran Status */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Veteran Status
+              </label>
+              <select {...register('veteran_status')} className="input-field">
+                {VETERAN_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
         </div>
 
         {/* Professional Summary */}
