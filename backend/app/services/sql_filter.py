@@ -83,7 +83,7 @@ async def filter_candidates_by_must_have_skills(
 
     logger.info(
         f"Applying must-have skills gate: {must_have_skills} "
-        f"→ normalized: {normalized_job_skills}"
+        f"→ normalized: {normalized_job_skills} ({len(normalized_job_skills)} unique)"
     )
 
     close_db = False
@@ -106,9 +106,11 @@ async def filter_candidates_by_must_have_skills(
             query = query.where(CandidateSkill.candidate_id.in_(uuid_list))
             logger.info(f"  → Filtering by {len(application_ids)} application IDs")
 
-        # Require candidate to have at least as many skills as originally requested
+        # Require candidate to have ALL normalized skills (use deduplicated count)
+        # CRITICAL FIX: Use len(normalized_job_skills) not len(must_have_skills)
+        # Example: ["React", "React.js"] -> ["react"] = 1 skill, not 2
         query = query.group_by(CandidateSkill.candidate_id).having(
-            func.count(func.distinct(CandidateSkill.skill_id)) >= len(must_have_skills)
+            func.count(func.distinct(CandidateSkill.skill_id)) >= len(normalized_job_skills)
         )
 
         result = await db.execute(query)

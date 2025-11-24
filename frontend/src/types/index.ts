@@ -109,6 +109,7 @@ export interface ApplicantsResponse {
 
 export interface RankedCandidate {
   candidate_id: string;
+  full_name: string;  // Added: Display name instead of ID
   final_score: number;
   band: string;
   confidence: number;
