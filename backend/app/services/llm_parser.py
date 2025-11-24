@@ -1,24 +1,21 @@
 """
-LLM-based resume parser with 4-bit quantization for memory efficiency.
+LLM-based resume parser optimized for low-resource systems.
 
 REPLACES: Regex-based extraction (extract_name, extract_email, etc.)
 KEEPS: Unstructured library for PDF/DOCX parsing
 
-Primary Model: Qwen/Qwen2-1.5B-Instruct (with 4-bit quantization)
-Fallback Model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+Primary Model: Qwen/Qwen2.5-0.5B-Instruct
+- 0.5B parameters (~1GB download, ~2GB RAM FP32)
+- Best balance of quality and speed for resume parsing
+- Supports GPU (FP16) and CPU (FP32) inference
 
-Why 4-bit Quantization?
-- Reduces RAM usage from ~3GB to ~1GB during inference
-- Prevents Windows paging file errors (os error 1455)
-- Minimal accuracy loss for structured extraction
+Fallback Model: HuggingFaceTB/SmolLM-135M-Instruct
+- 135M parameters (~300MB download, ~600MB RAM)
+- Ultra-lightweight for systems with limited memory
+- Works when primary model fails due to OOM
 
-IMPORTANT: Download size is still ~3GB (original model weights).
-Quantization reduces RAM usage AFTER loading, not download size.
-
-Why TinyLlama Fallback?
-- Even lighter: 1.1B parameters (~2GB download, ~1GB RAM)
-- Sufficient for basic resume parsing
-- Works when quantization libraries fail
+PRE-DOWNLOAD MODELS:
+Run `python download_model.py` to pre-download models for instant inference.
 """
 
 import asyncio
@@ -83,11 +80,11 @@ class LLMResumeParser:
     """
     Lightweight LLM for resume field extraction.
 
-    Uses microsoft/Phi-3-mini-4k-instruct for structured field extraction.
+    Uses Qwen/Qwen2.5-0.5B-Instruct for structured field extraction.
     All methods are async to prevent blocking the event loop.
     """
 
-    def __init__(self, model_name: str = "microsoft/Phi-3-mini-4k-instruct"):
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"):
         """
         Initialize LLM parser (lazy loading).
 
@@ -119,8 +116,9 @@ class LLMResumeParser:
                 return
 
             logger.info(f"🔄 Loading LLM model: {self.model_name}")
-            logger.info("⏳ First load may take 2-5 minutes to download model (~2-3GB)")
+            logger.info("⏳ First load may take 30-60 seconds to download model (~1GB)")
             logger.info("   Subsequent loads will be faster (cached locally)")
+            logger.info("   Tip: Run 'python download_model.py' to pre-download")
 
             # Run loading in thread pool to avoid blocking
             await asyncio.to_thread(self._load_model)
@@ -129,12 +127,12 @@ class LLMResumeParser:
 
     def _load_model(self):
         """
-        Load model and tokenizer with 4-bit quantization (runs in thread pool).
+        Load model and tokenizer (runs in thread pool).
 
         Strategy:
-        1. Try 4-bit quantization with primary model (lowest memory) - GPU only
-        2. If no GPU or bitsandbytes unavailable, try FP32 on CPU
-        3. If OOM, fallback to TinyLlama
+        1. GPU: Try primary model (Qwen2.5-0.5B) with FP16, then fallback (SmolLM-135M)
+        2. CPU: Try primary model with FP32, then fallback model
+        3. 4-bit quantization is optional for GPU (only if bitsandbytes available)
         """
         torch, transformers = _import_dependencies()
         global _bitsandbytes
@@ -155,14 +153,14 @@ class LLMResumeParser:
             models_to_try = [
                 (self.model_name, True, True),    # Primary with quantization on GPU
                 (self.model_name, False, True),   # Primary FP16 on GPU
-                (fallback_model, False, True),    # Fallback on GPU
-                (fallback_model, False, False),   # Fallback on CPU
+                (fallback_model, False, True),    # Fallback (SmolLM) on GPU
+                (fallback_model, False, False),   # Fallback (SmolLM) on CPU
             ]
         else:
             # CPU-only: Skip quantization (requires CUDA), use FP32
             models_to_try = [
-                (fallback_model, False, False),   # TinyLlama on CPU first (lighter)
-                (self.model_name, False, False),  # Primary on CPU
+                (self.model_name, False, False),  # Primary (Qwen2.5-0.5B) on CPU
+                (fallback_model, False, False),   # Fallback (SmolLM-135M) on CPU
             ]
 
         last_error = None
@@ -504,7 +502,7 @@ def get_llm_parser() -> LLMResumeParser:
     Get or create singleton LLM parser instance.
 
     Model loading is deferred until first parse_resume() call.
-    Uses model name from settings (default: Qwen/Qwen2-1.5B-Instruct).
+    Uses model name from settings (default: Qwen/Qwen2.5-0.5B-Instruct).
     """
     global _llm_parser_instance
 
