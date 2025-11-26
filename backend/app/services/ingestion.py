@@ -7,7 +7,7 @@ Flow: Poll Redis → Fetch candidate → Download resume → Parse → Extract s
 Features:
 - Retry logic with exponential backoff
 - Dead Letter Queue for failed jobs after max retries
-- Skills extraction from resume text (LLM + spaCy hybrid)
+- Skills extraction from resume text (OpenAI API with spaCy fallback)
 - Structured metrics collection
 - Store extracted skills in PostgreSQL for SQL gating
 """
@@ -224,32 +224,29 @@ class IngestionWorker:
                 logger.info(f"📄 Parsed resume text ({len(text)} chars)")
 
                 # ══════════════════════════════════════════════════════════════
-                # LLM-BASED FIELD EXTRACTION (with regex fallback)
+                # OPENAI API FIELD EXTRACTION (with spaCy fallback)
                 # ══════════════════════════════════════════════════════════════
                 from app.services.skill_extractor import extract_skills
 
                 parsed_data = None
                 llm_parsing_attempted = False
 
-                # Try LLM parsing if enabled
+                # Try OpenAI API parsing if enabled
                 if settings.use_llm_parsing:
                     try:
-                        logger.info("🤖 Attempting LLM-based field extraction...")
-                        from app.services.llm_parser import get_llm_parser
+                        logger.info("🤖 Attempting OpenAI API field extraction...")
+                        from app.services.llm_parser import get_openai_parser
 
-                        llm_parser = get_llm_parser()
+                        llm_parser = get_openai_parser()
                         llm_result = await llm_parser.parse_resume(text)
 
                         # ══════════════════════════════════════════════════════════════
                         # SKILL EXTRACTION & NORMALIZATION (Unified Pipeline)
                         # ══════════════════════════════════════════════════════════════
-                        # Extract skills using UNIFIED method
-                        # Change this ONE line to switch between LLM/spaCy/hybrid
-                        normalized_skills = await extract_skills(text, method="hybrid")
-                        # Options:
-                        #   method="hybrid" - LLM + spaCy (best, default when LLM enabled)
-                        #   method="llm"    - LLM only
-                        #   method="spacy"  - spaCy only
+                        # Extract skills using OpenAI API (with spaCy fallback)
+                        normalized_skills = await extract_skills(text, use_openai=True)
+                        # use_openai=True:  Try OpenAI API, fallback to spaCy if fails
+                        # use_openai=False: Use spaCy directly (faster, lower accuracy)
 
                         # ══════════════════════════════════════════════════════════════
                         # LOCATION EXTRACTION (consistent format)
@@ -278,17 +275,17 @@ class IngestionWorker:
                         }
 
                         llm_parsing_attempted = True
-                        logger.info(f"✅ LLM parsing successful")
-                        logger.info(f"   Skills: {len(normalized_skills)} (normalized via hybrid method)")
+                        logger.info(f"✅ OpenAI API parsing successful")
+                        logger.info(f"   Skills: {len(normalized_skills)} (extracted via OpenAI API)")
                         logger.info(f"   Location: {location_dict.get('city')}, {location_dict.get('region')}")
 
                     except Exception as e:
-                        logger.warning(f"⚠️  LLM parsing failed, falling back to regex: {e}")
+                        logger.warning(f"⚠️  OpenAI API parsing failed, falling back to spaCy: {e}")
                         llm_parsing_attempted = False
 
-                # Fallback to regex-based extraction if LLM disabled or failed
+                # Fallback to spaCy extraction if OpenAI disabled or failed
                 if not llm_parsing_attempted or parsed_data is None:
-                    logger.info("🔄 Using regex-based field extraction (fallback)")
+                    logger.info("🔄 Using spaCy/regex field extraction (fallback)")
                     from app.services.parsers import (
                         extract_name,
                         extract_email,
@@ -300,13 +297,9 @@ class IngestionWorker:
                     # ══════════════════════════════════════════════════════════════
                     # SKILL EXTRACTION & NORMALIZATION (Unified Pipeline)
                     # ══════════════════════════════════════════════════════════════
-                    # Extract skills using UNIFIED method
-                    # Change this ONE line to switch between methods
-                    normalized_skills = await extract_skills(text, method="spacy")
-                    # Options:
-                    #   method="spacy"  - spaCy + patterns (default when LLM disabled)
-                    #   method="hybrid" - Would use LLM + spaCy (but LLM is disabled)
-                    #   method="llm"    - Would use LLM only (but LLM is disabled)
+                    # Extract skills using spaCy (LLM disabled)
+                    normalized_skills = await extract_skills(text, use_openai=False)
+                    # use_openai=False: Use spaCy directly (no API calls)
 
                     # Parse location string to dict (consistent format)
                     location_str = extract_location(text)
@@ -343,7 +336,7 @@ class IngestionWorker:
                 )
 
                 logger.info(f"✅ Parse-only complete for {candidate_id}")
-                logger.info(f"   Method: {'LLM' if llm_parsing_attempted else 'Regex'}")
+                logger.info(f"   Method: {'OpenAI API' if llm_parsing_attempted else 'spaCy/Regex'}")
                 logger.info(f"   Name: {parsed_data['full_name']}")
                 logger.info(f"   Email: {parsed_data['email']}")
                 logger.info(f"   Skills: {len(parsed_data['skills'])} found")
@@ -422,13 +415,13 @@ class IngestionWorker:
                 from app.services.skill_extractor import extract_skills
 
                 if settings.use_llm_parsing:
-                    logger.info("Using LLM-based extraction (hybrid mode: LLM + spaCy)")
-                    # Extract skills using hybrid method (LLM + spaCy)
-                    extracted_skills = await extract_skills(text, method="hybrid")
+                    logger.info("Using OpenAI API for skill extraction (with spaCy fallback)")
+                    # Extract skills using OpenAI API (falls back to spaCy if fails)
+                    extracted_skills = await extract_skills(text, use_openai=True)
                 else:
                     logger.info("Using spaCy-based extraction (LLM disabled)")
                     # Extract skills using spaCy only
-                    extracted_skills = await extract_skills(text, method="spacy")
+                    extracted_skills = await extract_skills(text, use_openai=False)
 
                 logger.info(f"✅ Extracted {len(extracted_skills)} skills: {', '.join(extracted_skills[:5])}{'...' if len(extracted_skills) > 5 else ''}")
                 metrics_collector.record_timing("ingestion_stage_4_skills", stage_start)

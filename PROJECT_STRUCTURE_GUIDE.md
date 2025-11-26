@@ -1322,34 +1322,53 @@ ingestion.py -> extract_skills(text, method="hybrid")
 
 ---
 
-#### **`llm_parser.py`** - LLM Resume Parser 🤖
-**What it does:** Extracts ALL fields from a resume using a local LLM (Large Language Model).
+#### **`llm_parser.py`** - OpenAI Resume Parser 🤖
+**What it does:** Extracts ALL fields from a resume using OpenAI API (gpt-4o-mini).
 
 **Key concepts:**
-- **LLM**: A large language model that can understand and extract information from text
+- **OpenAI API**: Cloud-based AI service for text extraction
 - **Structured Output**: Extracts specific fields like name, email, skills in a structured format
-- **JSON Schema**: Uses JSON schema to ensure consistent output format
+- **JSON Mode**: Uses OpenAI's JSON mode to guarantee valid JSON output
 
 **Main functionalities:**
-1. Parses entire resume using local LLM (Qwen2.5-0.5B - lightweight 500M parameter model)
+1. Calls OpenAI API (gpt-4o-mini) to parse resume
 2. Extracts: full_name, email, phone, location, years_experience, professional_summary, skills
 3. Returns structured dictionary with all extracted fields
+4. Enforces 30s timeout for API calls (configurable)
+
+**Architecture Change (2025-11-24):**
+- **REMOVED**: Local LLM (Qwen/SmolLM) - too heavy, unstable, slow
+- **ADDED**: OpenAI API (gpt-4o-mini) - fast, cheap, reliable
+
+**Why OpenAI API?**
+- **Fast**: 2-5s API call vs 15-60s local model inference
+- **Cheap**: ~$0.0001 per resume (extremely affordable)
+- **Stable**: No local resource management, no OOM errors, no Windows issues
+- **Accurate**: Superior to local micro-LLMs
+- **Simple**: No model downloads, no caching, no memory management
+
+**Key Features:**
+- **JSON Mode**: Uses `response_format={"type": "json_object"}` for guaranteed JSON
+- **Timeout**: 30s timeout for API calls (vs 120s for local models)
+- **Fallback**: Returns empty structure on API failure (spaCy handles fallback)
+- **No Dependencies**: No torch, no transformers, no local model files
 
 **Why it's needed:**
 - Much better accuracy than regex for extracting contact information
 - Can understand context and extract relevant information
 - Returns consistent structured output across all resumes
+- **SHARED SERVICE**: Used by both Pipeline 1 (Webhook) and Pipeline 2 (API Upload)
 
 **Example:**
 ```python
-parser = LLMResumeParser()
+parser = get_openai_parser()
 result = await parser.parse_resume(resume_text)
 # Returns:
 # {
 #   "full_name": "John Doe",
 #   "email": "john@example.com",
 #   "phone": "+1-555-1234",
-#   "location": {"city": "SF", "region": "CA", "country": "US"},
+#   "location": {"city": "SF", "state": "CA", "country": "US"},
 #   "years_experience": 5.0,
 #   "professional_summary": "Experienced software engineer...",
 #   "skills": ["Python", "Django", "AWS"]
@@ -1519,7 +1538,7 @@ Webhook → Validate → Queue in Redis → Background Worker → 7-Stage Pipeli
 6. Generate embeddings (convert to vectors)
 7. Store in Qdrant (save for semantic search)
 
-**LLM Support:** When `USE_LLM_PARSING=true`, uses hybrid method (LLM + spaCy) for better skill extraction accuracy. Disabled by default.
+**AI Extraction:** When `USE_LLM_PARSING=true` (default), uses OpenAI API (gpt-4o-mini) for extraction. Falls back to spaCy if API unavailable. Simple, fast, reliable.
 
 **Databases Used:**
 - **PostgreSQL**: Read candidate, write skills

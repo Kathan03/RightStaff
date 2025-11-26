@@ -49,26 +49,16 @@ class Settings(BaseSettings):
     )
     embedding_dim: int = Field(default=384, env="EMBEDDING_DIM")
 
-    # LLM Parsing
+    # OpenAI API Configuration
     use_llm_parsing: bool = Field(
         default=True,  # Enabled by default for better skill extraction accuracy
         env="USE_LLM_PARSING",
-        description="Enable LLM-based resume parsing. Falls back to regex if disabled or on error."
+        description="Enable OpenAI API-based resume parsing. Falls back to spacy if disabled or on error."
     )
-    llm_parser_model: str = Field(
-        default="Qwen/Qwen2.5-0.5B-Instruct",  # 0.5B params, ~1GB download, ~2GB RAM
-        env="LLM_PARSER_MODEL",
-        description="HuggingFace model for resume field extraction (Qwen2.5-0.5B is lightweight and fast)"
-    )
-    llm_fallback_model: str = Field(
-        default="HuggingFaceTB/SmolLM-135M-Instruct",  # 135M params, ~300MB download
-        env="LLM_FALLBACK_MODEL",
-        description="Ultra-lightweight fallback model when primary fails due to memory constraints"
-    )
-    model_cache_dir: str = Field(
-        default="./model_cache",
-        env="MODEL_CACHE_DIR",
-        description="Directory for caching downloaded models to prevent re-downloading"
+    llm_inference_timeout: int = Field(
+        default=30,  # 30 seconds for API calls (faster than local models)
+        env="LLM_INFERENCE_TIMEOUT",
+        description="Timeout in seconds for OpenAI API calls"
     )
 
     # Text Processing

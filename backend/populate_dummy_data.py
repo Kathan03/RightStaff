@@ -855,7 +855,7 @@ async def create_applications(db):
     print("="*60)
 
     # Get first 3 jobs and first 10 candidates for demo
-    jobs_result = await db.execute(select(Job).limit(3))
+    jobs_result = await db.execute(select(Job).limit(6))
     jobs = jobs_result.scalars().all()
 
     candidates_result = await db.execute(select(Candidate).limit(10))
@@ -949,8 +949,7 @@ async def populate_all():
     print(f"   • Resumes in MinIO: 5 (3 candidates without resumes for testing)")
     print("\n💡 Next steps:")
     print("   1. Check data: python check_database.py")
-    print("   2. Run diagnostic: python diagnose_all.py")
-    print("   3. Test ranking: python test_day4_e2e_adaptive.py")
+    print("   2. Test ranking: python test_day4_e2e_adaptive.py")
     print("\n" + "="*70 + "\n")
 
 

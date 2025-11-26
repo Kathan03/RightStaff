@@ -54,14 +54,16 @@ FULL 7-STAGE PIPELINE:
     ├─ Stage 1: Fetch candidate details from PostgreSQL
     ├─ Stage 2: Download resume from MinIO
     ├─ Stage 3: Parse resume (extract text using Unstructured)
-    ├─ Stage 4: Extract skills (LLM hybrid mode if enabled, spaCy fallback)
+    ├─ Stage 4: Extract skills (OpenAI API if enabled, spaCy fallback)
     ├─ Stage 4.5: Store skills in PostgreSQL (skill + candidate_skill tables)
     ├─ Stage 4.6: Store resume record in PostgreSQL (candidate_resume table)
     ├─ Stage 5: Chunk text (split into 400-char overlapping chunks)
     ├─ Stage 6: Generate embeddings (1 profile + 1 skills + N chunks)
     └─ Stage 7: Store vectors in Qdrant (resumes collection)
 
-**LLM Support:** When `USE_LLM_PARSING=true`, Stage 4 uses hybrid method (LLM + spaCy) for better accuracy. When disabled, uses spaCy only.
+**AI Extraction:** When `USE_LLM_PARSING=true` (default), Stage 4 uses **OpenAI API (gpt-4o-mini)** for extraction. Falls back to spaCy if API unavailable.
+
+**Architecture:** OpenAI API (Primary) → Spacy (Fallback) - Simple, fast, reliable. No local model management.
 ```
 
 ### **Data Flow**
@@ -176,10 +178,12 @@ Queue PARSE_ONLY job in Redis
 Background worker processes in parse-only mode:
     ├─ Download resume from MinIO
     ├─ Parse text using Unstructured library
-    ├─ Extract fields (LLM if enabled, regex fallback):
-    │   - full_name, email, phone, location
-    │   - years_experience, professional_summary
-    │   - skills (extracted and normalized through ontology)
+    ├─ Extract fields using OpenAI API (llm_parser.py):
+    │   - OpenAI API extraction (gpt-4o-mini, 30s timeout)
+    │   - Spacy fallback if API fails or disabled
+    │   - Fields: full_name, email, phone, location
+    │   - years_experience, professional_summary, skills
+    ├─ Skills normalized through ontology service
     └─ Cache parsed data in Redis (1-hour TTL)
     ↓
 Poll Redis for completion (30 second timeout)
@@ -1075,14 +1079,13 @@ Portal Team sends HTTP POST
       │ YES                 │ NO
       ▼                     ▼
 ┌──────────────────┐  ┌──────────────────┐
-│  method="hybrid" │  │  method="spacy"  │
+│  OpenAI API      │  │  method="spacy"  │
 │                  │  │                  │
-│  1. LLM extract  │  │  1. spaCy NER    │
-│     (llm_parser) │  │     (ontology)   │
-│  2. spaCy NER    │  │  2. Normalize    │
-│     (ontology)   │  │                  │
-│  3. Merge lists  │  │                  │
-│  4. Normalize    │  │                  │
+│  1. Call OpenAI  │  │  1. spaCy NER    │
+│     (gpt-4o-mini)│  │     (ontology)   │
+│  2. If fail:     │  │  2. Normalize    │
+│     spaCy NER    │  │                  │
+│  3. Normalize    │  │                  │
 └────────┬─────────┘  └────────┬─────────┘
          │                     │
          └──────────┬──────────┘
@@ -1789,25 +1792,41 @@ async def extract_skills(
 
 ---
 
-#### **3. `llm_parser.py` - LLM Resume Parser**
+#### **3. `llm_parser.py` - OpenAI Resume Parser**
 
 **Location:** `backend/app/services/llm_parser.py`
 
-**Purpose:** Extract ALL fields from resume using LLM
+**Purpose:** Extract ALL fields from resume using OpenAI API (shared by both pipelines)
+
+**Architecture Change (2025-11-24):**
+- **REMOVED**: Local LLM (Qwen/SmolLM) - too heavy, unstable
+- **ADDED**: OpenAI API (gpt-4o-mini) - fast, cheap, reliable
+
+**Current Approach:** OpenAI API (gpt-4o-mini)
+- **Performance**: 2-5s API call vs 15-60s local model inference
+- **Cost**: ~$0.0001 per resume (extremely affordable)
+- **Stability**: No local resource management, no OOM errors
+- **Accuracy**: Superior to local micro-LLMs
+
+**Key Features:**
+- **JSON Mode**: Uses OpenAI's `response_format={"type": "json_object"}` for guaranteed JSON
+- **Timeout**: 30s timeout for API calls (configurable via `LLM_INFERENCE_TIMEOUT`)
+- **Fallback Strategy**: Returns empty structure on API failure (spaCy fallback handled by caller)
+- **No Model Management**: No downloads, no caching, no memory issues
 
 **Key Function:**
 ```python
-class LLMResumeParser:
+class OpenAIResumeParser:
     async def parse_resume(self, resume_text: str) -> Dict:
         """
-        Extract ALL fields using LLM.
+        Extract ALL fields using OpenAI API (gpt-4o-mini).
 
         Returns:
         {
             "full_name": "John Doe",
             "email": "john@example.com",
             "phone": "+1-555-1234",
-            "location": {"city": "SF", "region": "CA", "country": "US"},
+            "location": {"city": "SF", "state": "CA", "country": "US"},
             "years_experience": 5.0,
             "professional_summary": "...",
             "skills": ["Python", "Django", "AWS"]
@@ -1816,8 +1835,9 @@ class LLMResumeParser:
 ```
 
 **When Called:**
-- By `ingestion.py` in parse-only mode
-- By `skill_extractor.py` when `method="llm"` or `method="hybrid"`
+- By `ingestion.py` in parse-only mode (Pipeline 2 Stage 1)
+- By `skill_extractor.py` for skill extraction (Pipeline 1 & 2)
+- **IMPORTANT**: This service is shared by BOTH Pipeline 1 and Pipeline 2!
 
 **Invoked By FastAPI Endpoints:**
 - `POST /api/v1/webhooks/candidate-updated` ([webhooks.py](backend/app/api/webhooks.py))

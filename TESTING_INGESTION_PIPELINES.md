@@ -156,7 +156,7 @@ CREATING JOB APPLICATIONS
 
 ### **Pipeline 1: Candidate Resume Webhook Ingestion**
 
-**LLM Support:** Pipeline 1 now supports LLM-based skill extraction. When `USE_LLM_PARSING=true`, uses hybrid method (LLM + spaCy) for better accuracy. Disabled by default.
+**AI Extraction:** Pipeline 1 uses OpenAI API (gpt-4o-mini) for skill extraction when `USE_LLM_PARSING=true` (default). Falls back to spaCy if API unavailable.
 
 #### **Test: Send Webhook**
 

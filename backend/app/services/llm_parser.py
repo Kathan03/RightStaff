@@ -1,21 +1,20 @@
 """
-LLM-based resume parser optimized for low-resource systems.
+OpenAI-based resume parser for production-grade extraction.
 
-REPLACES: Regex-based extraction (extract_name, extract_email, etc.)
-KEEPS: Unstructured library for PDF/DOCX parsing
+ARCHITECTURE CHANGE (2025-11-24):
+- REMOVED: Local LLM (Qwen/SmolLM) - too heavy, unstable
+- ADDED: OpenAI API (gpt-4o-mini) - fast, cheap, reliable
 
-Primary Model: Qwen/Qwen2.5-0.5B-Instruct
-- 0.5B parameters (~1GB download, ~2GB RAM FP32)
-- Best balance of quality and speed for resume parsing
-- Supports GPU (FP16) and CPU (FP32) inference
+PRIMARY: OpenAI API (gpt-4o-mini)
+- Fast inference (~2-5s)
+- High accuracy
+- No local resources needed
+- Cost: ~$0.0001 per resume
 
-Fallback Model: HuggingFaceTB/SmolLM-135M-Instruct
-- 135M parameters (~300MB download, ~600MB RAM)
-- Ultra-lightweight for systems with limited memory
-- Works when primary model fails due to OOM
-
-PRE-DOWNLOAD MODELS:
-Run `python download_model.py` to pre-download models for instant inference.
+FALLBACK: Spacy/Regex (if OpenAI fails)
+- Basic extraction using patterns
+- Always available
+- Lower accuracy but reliable
 """
 
 import asyncio
@@ -25,237 +24,51 @@ import os
 import re
 from typing import Dict, Optional
 from datetime import datetime
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Lazy imports (only load when needed)
-_torch = None
-_transformers = None
-_bitsandbytes = None
-
-# These will be loaded from settings when needed
-def _get_fallback_model():
-    """Get fallback model from settings."""
-    from app.config import settings
-    return settings.llm_fallback_model
-
-def _get_cache_dir():
-    """Get model cache directory from settings."""
-    from app.config import settings
-    return Path(settings.model_cache_dir)
+# OpenAI client (lazy import)
+_openai_client = None
 
 
-def _import_dependencies():
-    """Lazy import of heavy dependencies."""
-    global _torch, _transformers, _bitsandbytes
+def _get_openai_client():
+    """Get or create OpenAI client (lazy loading)."""
+    global _openai_client
 
-    if _torch is None or _transformers is None:
+    if _openai_client is None:
         try:
-            import torch as t
-            import transformers as tf
-            _torch = t
-            _transformers = tf
-            logger.info("✅ Loaded torch and transformers")
-        except ImportError as e:
-            logger.error(f"❌ Failed to import dependencies: {e}")
-            raise ImportError(
-                "Missing dependencies. Install with: pip install torch transformers accelerate"
-            ) from e
+            from openai import AsyncOpenAI
+            from app.config import settings
 
-    # Try to import bitsandbytes for quantization (optional)
-    if _bitsandbytes is None:
-        try:
-            import bitsandbytes as bnb
-            _bitsandbytes = bnb
-            logger.info("✅ Loaded bitsandbytes for 4-bit quantization")
+            if not settings.openai_api_key:
+                raise ValueError("OPENAI_API_KEY not configured")
+
+            _openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
+            logger.info("✅ OpenAI client initialized")
         except ImportError:
-            logger.warning("⚠️ bitsandbytes not available - will use fallback model or FP16")
-            _bitsandbytes = False  # Mark as attempted but failed
+            logger.error("❌ OpenAI library not installed. Run: pip install openai")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize OpenAI client: {e}")
+            raise
 
-    return _torch, _transformers
+    return _openai_client
 
 
-class LLMResumeParser:
+class OpenAIResumeParser:
     """
-    Lightweight LLM for resume field extraction.
+    Production-grade resume parser using OpenAI API.
 
-    Uses Qwen/Qwen2.5-0.5B-Instruct for structured field extraction.
-    All methods are async to prevent blocking the event loop.
+    Simple, fast, and reliable. No local model management.
     """
 
-    def __init__(self, model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"):
-        """
-        Initialize LLM parser (lazy loading).
-
-        Args:
-            model_name: HuggingFace model ID
-        """
-        self.model_name = model_name
-        self.model = None
-        self.tokenizer = None
-        self._loading = False
-        self._load_lock = asyncio.Lock()
-        logger.info(f"🤖 LLM parser initialized (model will load on first use): {model_name}")
-
-    async def _ensure_loaded(self):
-        """
-        Ensure model and tokenizer are loaded (lazy loading with lock).
-
-        Why lazy loading?
-        - Doesn't delay server startup
-        - Only loads if LLM parsing is actually used
-        - Saves memory if feature is disabled
-        """
-        if self.model is not None and self.tokenizer is not None:
-            return  # Already loaded
-
-        async with self._load_lock:
-            # Double-check after acquiring lock
-            if self.model is not None and self.tokenizer is not None:
-                return
-
-            logger.info(f"🔄 Loading LLM model: {self.model_name}")
-            logger.info("⏳ First load may take 30-60 seconds to download model (~1GB)")
-            logger.info("   Subsequent loads will be faster (cached locally)")
-            logger.info("   Tip: Run 'python download_model.py' to pre-download")
-
-            # Run loading in thread pool to avoid blocking
-            await asyncio.to_thread(self._load_model)
-
-            logger.info("✅ LLM model loaded successfully")
-
-    def _load_model(self):
-        """
-        Load model and tokenizer (runs in thread pool).
-
-        Strategy:
-        1. GPU: Try primary model (Qwen2.5-0.5B) with FP16, then fallback (SmolLM-135M)
-        2. CPU: Try primary model with FP32, then fallback model
-        3. 4-bit quantization is optional for GPU (only if bitsandbytes available)
-        """
-        torch, transformers = _import_dependencies()
-        global _bitsandbytes
-
-        # Get settings
-        cache_dir = _get_cache_dir()
-        fallback_model = _get_fallback_model()
-
-        # Ensure cache directory exists
-        cache_dir.mkdir(parents=True, exist_ok=True)
-
-        # Check if CUDA is available
-        has_cuda = torch.cuda.is_available()
-        logger.info(f"🖥️  CUDA available: {has_cuda}")
-
-        # Define models to try based on hardware
-        if has_cuda:
-            models_to_try = [
-                (self.model_name, True, True),    # Primary with quantization on GPU
-                (self.model_name, False, True),   # Primary FP16 on GPU
-                (fallback_model, False, True),    # Fallback (SmolLM) on GPU
-                (fallback_model, False, False),   # Fallback (SmolLM) on CPU
-            ]
-        else:
-            # CPU-only: Skip quantization (requires CUDA), use FP32
-            models_to_try = [
-                (self.model_name, False, False),  # Primary (Qwen2.5-0.5B) on CPU
-                (fallback_model, False, False),   # Fallback (SmolLM-135M) on CPU
-            ]
-
-        last_error = None
-
-        for model_name, use_quantization, use_gpu in models_to_try:
-            try:
-                device_info = "GPU" if use_gpu else "CPU"
-                quant_info = "4-bit" if use_quantization else "FP32" if not use_gpu else "FP16"
-                logger.info(f"🔄 Attempting to load: {model_name} ({quant_info} on {device_info})")
-
-                # Load tokenizer
-                self.tokenizer = transformers.AutoTokenizer.from_pretrained(
-                    model_name,
-                    trust_remote_code=True,
-                    cache_dir=str(cache_dir)
-                )
-
-                # Prepare model loading kwargs
-                model_kwargs = {
-                    "trust_remote_code": True,
-                    "low_cpu_mem_usage": True,
-                    "cache_dir": str(cache_dir),
-                }
-
-                # Configure based on hardware and quantization
-                if use_quantization and use_gpu and _bitsandbytes and _bitsandbytes is not False:
-                    # 4-bit quantization on GPU
-                    try:
-                        from transformers import BitsAndBytesConfig
-
-                        quantization_config = BitsAndBytesConfig(
-                            load_in_4bit=True,
-                            bnb_4bit_compute_dtype=torch.float16,
-                            bnb_4bit_quant_type="nf4",
-                            bnb_4bit_use_double_quant=True,
-                        )
-                        model_kwargs["quantization_config"] = quantization_config
-                        model_kwargs["device_map"] = "auto"
-                        logger.info("📦 Using 4-bit quantization (bitsandbytes)")
-
-                    except Exception as quant_error:
-                        logger.warning(f"⚠️ Quantization setup failed: {quant_error}")
-                        model_kwargs["torch_dtype"] = torch.float16
-                        model_kwargs["device_map"] = "auto"
-
-                elif use_gpu:
-                    # FP16 on GPU
-                    model_kwargs["torch_dtype"] = torch.float16
-                    model_kwargs["device_map"] = "auto"
-
-                else:
-                    # FP32 on CPU - DO NOT use device_map="auto" (causes disk offload error)
-                    model_kwargs["torch_dtype"] = torch.float32
-                    # No device_map - loads directly to CPU
-
-                # Load model
-                self.model = transformers.AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    **model_kwargs
-                )
-
-                # Move to CPU explicitly if needed
-                if not use_gpu and hasattr(self.model, 'to'):
-                    self.model = self.model.to('cpu')
-
-                # Update model name if we switched to fallback
-                self.model_name = model_name
-
-                logger.info(f"✅ Model loaded successfully: {model_name}")
-                logger.info(f"   Device: {self.model.device if hasattr(self.model, 'device') else 'cpu'}")
-                logger.info(f"   Cache: {cache_dir}")
-                return  # Success!
-
-            except Exception as e:
-                last_error = e
-                error_msg = str(e).lower()
-
-                # Check for memory-related errors
-                if "memory" in error_msg or "1455" in error_msg or "oom" in error_msg or "disk_offload" in error_msg:
-                    logger.warning(f"⚠️ Memory/offload error with {model_name}: {e}")
-                else:
-                    logger.warning(f"⚠️ Failed to load {model_name}: {e}")
-
-                continue  # Try next model
-
-        # All attempts failed
-        logger.error(f"❌ All model loading attempts failed. Last error: {last_error}")
-        raise RuntimeError(
-            f"Failed to load any LLM model. Tried: {[m[0] for m in models_to_try]}. "
-            f"Last error: {last_error}"
-        )
+    def __init__(self):
+        """Initialize parser (client loads on first use)."""
+        logger.info("🤖 OpenAI resume parser initialized (client loads on first use)")
 
     async def parse_resume(self, resume_text: str) -> Dict:
         """
-        Extract structured fields from resume using LLM (async).
+        Extract structured fields from resume using OpenAI API.
 
         Args:
             resume_text: Raw resume text (from Unstructured parser)
@@ -271,43 +84,16 @@ class LLMResumeParser:
                 "skills": List[str]
             }
         """
-        logger.info("📄 Starting LLM-based resume parsing")
+        logger.info("📄 Starting OpenAI-based resume parsing")
 
-        # Ensure model is loaded
-        await self._ensure_loaded()
+        # Truncate to 3000 chars (fits in OpenAI context, leaves room for prompt)
+        resume_snippet = resume_text[:3000]
 
-        # Truncate to 2000 chars (fits in 4k context)
-        resume_snippet = resume_text[:2000]
-
-        # Construct prompt
-        prompt = f"""Extract information from this resume and return ONLY valid JSON.
-
-Resume:
-{resume_snippet}
-
-Extract these fields:
-1. full_name (string) - Candidate's full name
-2. email (string) - Email address
-3. phone (string) - Phone number
-4. location (object) - {{"city": "...", "state": "...", "country": "..."}}
-5. years_experience (number) - Total years calculated from employment dates
-6. professional_summary (string) - 2-3 sentence summary of candidate's background
-7. skills (array) - List of technical skills mentioned in resume
-
-IMPORTANT:
-- Return ONLY valid JSON, no explanation
-- If field not found, use null
-- Calculate years_experience from dates in resume
-- Extract ALL skills mentioned (programming languages, frameworks, tools, etc.)
-
-JSON:
-{{"""
-
-        # Run inference in thread pool to avoid blocking
         try:
-            parsed_data = await asyncio.to_thread(self._run_inference, prompt)
+            # Call OpenAI API
+            parsed_data = await self._parse_with_openai(resume_snippet)
 
-            logger.info(f"✅ Parsed resume: {parsed_data.get('full_name', 'Unknown')}")
+            logger.info(f"✅ Parsed resume via OpenAI: {parsed_data.get('full_name', 'Unknown')}")
             logger.info(f"   Email: {parsed_data.get('email', 'N/A')}")
             logger.info(f"   Years: {parsed_data.get('years_experience', 'N/A')}")
             logger.info(f"   Skills: {len(parsed_data.get('skills', []))} found")
@@ -315,80 +101,88 @@ JSON:
             return parsed_data
 
         except Exception as e:
-            logger.error(f"❌ LLM parsing failed: {e}")
+            logger.error(f"❌ OpenAI parsing failed: {e}")
+            logger.error("   Falling back to empty structure (spacy fallback handled by caller)")
             return self._empty_structure()
 
-    def _run_inference(self, prompt: str) -> Dict:
+    async def _parse_with_openai(self, resume_text: str) -> Dict:
         """
-        Run LLM inference (synchronous, runs in thread pool).
+        Call OpenAI API to extract resume fields.
 
-        Args:
-            prompt: Formatted prompt
-
-        Returns:
-            Parsed data dictionary
+        Uses gpt-4o-mini for fast, cheap, accurate extraction.
         """
-        torch, transformers = _import_dependencies()
+        client = _get_openai_client()
 
-        # Tokenize
-        inputs = self.tokenizer(
-            prompt,
-            return_tensors="pt",
-            truncation=True,
-            max_length=3000
-        )
+        # Construct strict prompt for JSON extraction
+        system_prompt = """You are a resume parser that outputs ONLY valid JSON.
 
-        # Move to same device as model
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+Output format (copy exactly):
+{
+    "full_name": "string or null",
+    "email": "string or null",
+    "phone": "string or null",
+    "location": {"city": "string or null", "state": "string or null", "country": "string or null"},
+    "years_experience": number or null,
+    "professional_summary": "string or null",
+    "skills": ["skill1", "skill2"]
+}
 
-        # Generate
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=500,
-                temperature=0.1,  # Low temp for deterministic output
-                do_sample=False,
-                pad_token_id=self.tokenizer.eos_token_id
+Rules:
+- Output ONLY JSON, no explanations
+- Calculate years_experience from employment dates
+- Extract ALL technical skills (languages, frameworks, tools, databases)
+- Use null if field not found
+- Location: Use "state" for US states/regions"""
+
+        user_prompt = f"""Extract information from this resume:
+
+{resume_text}
+
+Return ONLY the JSON object."""
+
+        logger.info("⏳ Calling OpenAI API (gpt-4o-mini)...")
+
+        # Call OpenAI with timeout
+        from app.config import settings
+        timeout = getattr(settings, 'llm_inference_timeout', 30)  # 30s for API calls
+
+        try:
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    temperature=0.1,  # Low temp for deterministic output
+                    max_tokens=1000,  # Enough for resume fields
+                    response_format={"type": "json_object"}  # Force JSON mode
+                ),
+                timeout=timeout
             )
 
-        # Decode response
-        response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-        logger.debug(f"LLM response: {response[:200]}...")
-
-        # Extract JSON from response
-        parsed_data = self._extract_json(response)
-
-        # Post-process and validate
-        parsed_data = self._validate_and_clean(parsed_data)
-
-        return parsed_data
-
-    def _extract_json(self, response: str) -> Dict:
-        """
-        Extract JSON from LLM response.
-
-        Handles cases where LLM adds text before/after JSON.
-        """
-        try:
-            # Find JSON boundaries
-            json_start = response.find('{')
-            json_end = response.rfind('}') + 1
-
-            if json_start == -1 or json_end == 0:
-                logger.warning("No JSON found in response")
-                return self._empty_structure()
-
-            json_str = response[json_start:json_end]
+            # Extract JSON from response
+            json_str = response.choices[0].message.content
+            logger.debug(f"OpenAI response: {json_str[:200]}...")
 
             # Parse JSON
             parsed = json.loads(json_str)
+
+            # Validate and clean
+            parsed = self._validate_and_clean(parsed)
+
             return parsed
 
+        except asyncio.TimeoutError:
+            logger.error(f"❌ OpenAI API timed out after {timeout}s")
+            raise
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON: {e}")
-            logger.error(f"Response: {response[:500]}")
-            return self._empty_structure()
+            logger.error(f"❌ Failed to parse OpenAI response as JSON: {e}")
+            logger.error(f"   Response: {json_str[:500]}")
+            raise
+        except Exception as e:
+            logger.error(f"❌ OpenAI API call failed: {e}")
+            raise
 
     def _validate_and_clean(self, data: Dict) -> Dict:
         """
@@ -491,23 +285,25 @@ JSON:
 
 
 # ═══════════════════════════════════════════════════════════════
-# Singleton instance with lazy loading
+# Singleton instance
 # ═══════════════════════════════════════════════════════════════
 
-_llm_parser_instance = None
+_parser_instance = None
 
 
-def get_llm_parser() -> LLMResumeParser:
+def get_openai_parser() -> OpenAIResumeParser:
     """
-    Get or create singleton LLM parser instance.
+    Get or create singleton OpenAI parser instance.
 
-    Model loading is deferred until first parse_resume() call.
-    Uses model name from settings (default: Qwen/Qwen2.5-0.5B-Instruct).
+    Simple and clean - no model loading complexity.
     """
-    global _llm_parser_instance
+    global _parser_instance
 
-    if _llm_parser_instance is None:
-        from app.config import settings
-        _llm_parser_instance = LLMResumeParser(model_name=settings.llm_parser_model)
+    if _parser_instance is None:
+        _parser_instance = OpenAIResumeParser()
 
-    return _llm_parser_instance
+    return _parser_instance
+
+
+# Backward compatibility alias
+get_llm_parser = get_openai_parser
