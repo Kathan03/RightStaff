@@ -51,9 +51,11 @@ async def chat_websocket(websocket: WebSocket, job_id: str):
             result = await chatbot.chat(job_id, question, history)
 
             if result.get('error'):
+                # Send error with the response message (for guardrails, etc.)
                 await websocket.send_json({
                     "type": "error",
-                    "message": result['error']
+                    "error_code": result['error'],
+                    "message": result.get('response', f"Error: {result['error']}")
                 })
             else:
                 # Send content as 'token' type (frontend expects this)

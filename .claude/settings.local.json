@@ -60,7 +60,9 @@
       "Bash(timeout 20 ../venv/Scripts/python:*)",
       "Bash(timeout 600 ../venv/Scripts/python:*)",
       "Bash(docker restart:*)",
-      "Bash(timeout 15 bash:*)"
+      "Bash(timeout 15 bash:*)",
+      "Bash(netstat:*)",
+      "Bash(timeout 120 ../venv/Scripts/python:*)"
     ],
     "deny": [],
     "ask": []

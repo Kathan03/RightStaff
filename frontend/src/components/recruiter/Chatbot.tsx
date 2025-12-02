@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ChatWebSocket } from '../../api/chat';
 import { ChatMessage, ChatResponse } from '../../types';
-import { Send, MessageCircle, AlertCircle } from 'lucide-react';
+import { Send, AlertCircle, Brain, Sparkles } from 'lucide-react';
 
 interface ChatbotProps {
   jobId: string;
@@ -87,15 +87,7 @@ export const Chatbot: React.FC<ChatbotProps> = ({ jobId }) => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-white">
-      <div className="flex items-center gap-3 p-4 pb-3 border-b border-gray-200">
-        <MessageCircle className="w-5 h-5 text-primary-600" />
-        <div>
-          <h3 className="text-lg font-bold text-gray-900">AI Recruiter Assistant</h3>
-          <p className="text-xs text-gray-600">Ask questions about candidates</p>
-        </div>
-      </div>
-
+    <div className="h-full flex flex-col bg-gradient-to-b from-gray-50 to-white">
       {connecting && (
         <div className="text-center text-gray-500 py-4 flex items-center justify-center gap-2">
           <div className="w-4 h-4 border-2 border-primary-600 border-t-transparent rounded-full animate-spin" />
@@ -113,11 +105,16 @@ export const Chatbot: React.FC<ChatbotProps> = ({ jobId }) => {
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto space-y-4 p-4 pr-2">
         {messages.length === 0 && !connecting && (
-          <div className="text-center py-8">
-            <MessageCircle className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500 mb-2">Start a conversation</p>
-            <p className="text-sm text-gray-400">
-              Ask questions like "Who has Python experience?" or "Show me frontend developers"
+          <div className="text-center py-12 animate-fade-in">
+            <div className="relative w-20 h-20 mx-auto mb-4">
+              <div className="w-20 h-20 bg-gradient-to-br from-primary-100 via-primary-200 to-purple-100 rounded-2xl flex items-center justify-center shadow-lg">
+                <Brain className="w-10 h-10 text-primary-600" />
+              </div>
+              <Sparkles className="w-5 h-5 absolute -top-1 -right-1 text-yellow-500 animate-pulse" />
+            </div>
+            <p className="text-gray-700 font-semibold mb-2 text-lg">Ask RecruitMind</p>
+            <p className="text-sm text-gray-500 max-w-xs mx-auto">
+              "Who has Python experience?" or "Show me frontend developers"
             </p>
           </div>
         )}
@@ -125,15 +122,20 @@ export const Chatbot: React.FC<ChatbotProps> = ({ jobId }) => {
         {messages.map((msg, idx) => (
           <div
             key={idx}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'} animate-slide-up`}
           >
+            <p className={`text-xs font-semibold mb-1 px-2 ${
+              msg.role === 'user' ? 'text-primary-700' : 'text-gray-700'
+            }`}>
+              {msg.role === 'user' ? 'You' : 'RecruitMind'}
+            </p>
             <div
               className={`
-                max-w-[80%] px-4 py-3 rounded-lg
+                max-w-[80%] px-4 py-3 rounded-2xl shadow-md
                 ${
                   msg.role === 'user'
-                    ? 'bg-primary-600 text-white rounded-br-none'
-                    : 'bg-gray-100 text-gray-900 rounded-bl-none border border-gray-200'
+                    ? 'bg-gradient-to-br from-primary-600 to-primary-700 text-white rounded-br-none'
+                    : 'bg-white text-gray-900 rounded-bl-none border border-gray-200 shadow-sm'
                 }
               `}
             >
@@ -143,12 +145,13 @@ export const Chatbot: React.FC<ChatbotProps> = ({ jobId }) => {
         ))}
 
         {isTyping && (
-          <div className="flex justify-start">
-            <div className="bg-gray-100 px-4 py-3 rounded-lg rounded-bl-none border border-gray-200">
-              <div className="flex gap-1">
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-100" />
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-200" />
+          <div className="flex flex-col items-start animate-slide-up">
+            <p className="text-xs font-semibold mb-1 px-2 text-gray-700">RecruitMind</p>
+            <div className="bg-white px-4 py-3 rounded-2xl rounded-bl-none border border-gray-200 shadow-sm">
+              <div className="flex gap-1.5">
+                <div className="w-2.5 h-2.5 bg-primary-400 rounded-full animate-bounce" />
+                <div className="w-2.5 h-2.5 bg-primary-400 rounded-full animate-bounce delay-100" />
+                <div className="w-2.5 h-2.5 bg-primary-400 rounded-full animate-bounce delay-200" />
               </div>
             </div>
           </div>
@@ -158,19 +161,19 @@ export const Chatbot: React.FC<ChatbotProps> = ({ jobId }) => {
       </div>
 
       {/* Input Area */}
-      <div className="flex gap-2 p-4 pt-3 border-t border-gray-200">
+      <div className="flex gap-3 p-4 pt-3 border-t border-gray-200 bg-white shadow-lg">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyPress={handleKeyPress}
-          placeholder="Ask about candidates..."
-          className="input-field flex-1"
+          placeholder="Ask RecruitMind about candidates..."
+          className="input-field flex-1 rounded-xl"
           disabled={connecting || isTyping}
         />
         <button
           onClick={handleSend}
           disabled={connecting || !input.trim() || isTyping}
-          className="btn-primary px-4"
+          className="btn-primary px-5 rounded-xl flex items-center gap-2"
         >
           <Send className="w-5 h-5" />
         </button>

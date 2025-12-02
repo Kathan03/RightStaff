@@ -52,6 +52,10 @@ class JobCreateRequest(BaseModel):
     min_years_experience: Optional[float] = None
     max_years_experience: Optional[float] = None
     location: Optional[str] = None
+    is_remote: bool = False
+    visa_sponsorship_available: bool = False
+    work_arrangement: Optional[str] = None
+    employment_type: Optional[str] = None
 
 
 class ApplyToJobRequest(BaseModel):
@@ -82,6 +86,10 @@ async def create_job(
         min_years_experience=request.min_years_experience,
         max_years_experience=request.max_years_experience,
         location=request.location,
+        is_remote=request.is_remote,
+        visa_sponsorship_available=request.visa_sponsorship_available,
+        work_arrangement=request.work_arrangement,
+        employment_type=request.employment_type,
         status=JobStatus.open
     )
     

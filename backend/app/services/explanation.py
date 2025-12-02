@@ -148,17 +148,22 @@ class ExplanationGenerator:
         Returns chunks that support the ranking decision.
         """
         evidence = []
+        seen_texts = set()  # Track unique text content to prevent duplicates
 
         # Find retrieval result for this candidate
         for result in retrieval_results:
             if result.candidate_id == candidate_id:
                 for chunk in result.evidence_chunks:
-                    evidence.append({
-                        'text': chunk['text'][:200] + '...',  # Truncate
-                        'skills_found': chunk.get('skills_detected', []),
-                        'relevance_score': chunk['score'],
-                        'location': f"Resume chunk {chunk.get('chunk_index', '?')}"
-                    })
+                    # Deduplicate by text content (first 200 chars)
+                    text_key = chunk['text'][:200].strip()
+                    if text_key not in seen_texts:
+                        seen_texts.add(text_key)
+                        evidence.append({
+                            'text': chunk['text'][:200] + '...',  # Truncate
+                            'skills_found': chunk.get('skills_detected', []),
+                            'relevance_score': chunk['score'],
+                            'source': f"Resume chunk {chunk.get('chunk_index', '?')}"
+                        })
                 break
 
         return evidence

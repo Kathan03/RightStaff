@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { MessageCircle, X } from 'lucide-react';
+import { X, Brain, Sparkles, Zap } from 'lucide-react';
 import { Chatbot } from '../recruiter/Chatbot';
 
 interface ChatbotWidgetProps {
@@ -11,15 +11,21 @@ export const ChatbotWidget: React.FC<ChatbotWidgetProps> = ({ jobId }) => {
 
   return (
     <>
-      {/* Floating Button */}
+      {/* Floating Button with Creative AI Icon */}
       <button
         onClick={() => setIsOpen(true)}
-        className={`fixed bottom-6 right-6 w-14 h-14 bg-primary-600 hover:bg-primary-700 text-white rounded-full shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center z-40 ${
-          isOpen ? 'scale-0' : 'scale-100'
+        className={`fixed bottom-6 right-6 w-16 h-16 bg-gradient-to-br from-primary-600 via-primary-700 to-purple-600 hover:from-primary-700 hover:via-primary-800 hover:to-purple-700 text-white rounded-full shadow-xl hover:shadow-2xl transition-all duration-300 flex items-center justify-center z-40 group gradient-animated ${
+          isOpen ? 'scale-0 opacity-0' : 'scale-100 opacity-100 hover:scale-110'
         }`}
-        aria-label="Open chat"
+        aria-label="Open RecruitMind"
       >
-        <MessageCircle className="w-6 h-6" />
+        <div className="relative">
+          {/* Main Brain Icon */}
+          <Brain className="w-7 h-7 group-hover:scale-110 transition-transform duration-200" />
+          {/* Animated Sparkles */}
+          <Sparkles className="w-3 h-3 absolute -top-1 -right-1 text-yellow-300 animate-pulse" />
+          <Zap className="w-2.5 h-2.5 absolute -bottom-0.5 -left-0.5 text-cyan-300 animate-ping" />
+        </div>
       </button>
 
       {/* Chat Modal */}
@@ -27,21 +33,33 @@ export const ChatbotWidget: React.FC<ChatbotWidgetProps> = ({ jobId }) => {
         <>
           {/* Backdrop */}
           <div
-            className="fixed inset-0 bg-black bg-opacity-25 z-40"
+            className="fixed inset-0 bg-black bg-opacity-30 backdrop-blur-sm z-40 animate-fade-in"
             onClick={() => setIsOpen(false)}
           />
 
           {/* Chat Panel */}
-          <div className="fixed bottom-6 right-6 w-[400px] h-[600px] bg-white rounded-lg shadow-2xl z-50 flex flex-col overflow-hidden animate-slide-up">
+          <div className="fixed bottom-6 right-6 w-[360px] h-[550px] bg-white rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden animate-scale-in border-2 border-primary-200">
             {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-primary-600 text-white">
-              <div className="flex items-center gap-2">
-                <MessageCircle className="w-5 h-5" />
-                <span className="font-semibold">AI Assistant</span>
+            <div className="flex items-center justify-between p-4 border-b border-primary-100 bg-gradient-to-r from-primary-600 via-primary-700 to-purple-600 text-white gradient-animated">
+              <div className="flex items-center gap-3">
+                <div className="relative">
+                  {/* AI Brain Icon with Effects */}
+                  <div className="w-10 h-10 bg-white bg-opacity-20 rounded-full flex items-center justify-center">
+                    <Brain className="w-5 h-5" />
+                    <Sparkles className="w-2.5 h-2.5 absolute -top-0.5 -right-0.5 text-yellow-300 animate-pulse" />
+                  </div>
+                </div>
+                <div>
+                  <span className="font-semibold text-lg">RecruitMind</span>
+                  <p className="text-xs text-primary-100 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse"></span>
+                    Online • AI Recruiting Assistant
+                  </p>
+                </div>
               </div>
               <button
                 onClick={() => setIsOpen(false)}
-                className="p-1 hover:bg-primary-700 rounded transition-colors"
+                className="p-1.5 hover:bg-white hover:bg-opacity-20 rounded-lg transition-all duration-200 hover:scale-110"
                 aria-label="Close chat"
               >
                 <X className="w-5 h-5" />
@@ -49,7 +67,7 @@ export const ChatbotWidget: React.FC<ChatbotWidgetProps> = ({ jobId }) => {
             </div>
 
             {/* Chatbot Content */}
-            <div className="flex-1 overflow-hidden">
+            <div className="flex-1 overflow-hidden bg-gradient-to-b from-gray-50 to-white">
               <Chatbot jobId={jobId} />
             </div>
           </div>

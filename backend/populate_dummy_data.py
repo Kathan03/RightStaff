@@ -46,7 +46,9 @@ DUMMY_JOBS = [
         "min_years_experience": 5.0,
         "max_years_experience": 10.0,
         "work_arrangement": "hybrid",
-        "employment_type": "full-time"
+        "employment_type": "full-time",
+        "is_remote": False,
+        "visa_sponsorship_available": True
     },
     {
         "title": "Full-Stack Engineer (React + Python)",
@@ -69,7 +71,9 @@ DUMMY_JOBS = [
         "min_years_experience": 3.0,
         "max_years_experience": 8.0,
         "work_arrangement": "remote",
-        "employment_type": "full-time"
+        "employment_type": "full-time",
+        "is_remote": True,
+        "visa_sponsorship_available": False
     },
     {
         "title": "Data Engineer - Big Data Platform",
@@ -92,7 +96,9 @@ DUMMY_JOBS = [
         "min_years_experience": 4.0,
         "max_years_experience": 12.0,
         "work_arrangement": "hybrid",
-        "employment_type": "full-time"
+        "employment_type": "full-time",
+        "is_remote": False,
+        "visa_sponsorship_available": True
     },
     {
         "title": "Java Backend Engineer - Microservices",
@@ -116,7 +122,9 @@ DUMMY_JOBS = [
         "min_years_experience": 5.0,
         "max_years_experience": 10.0,
         "work_arrangement": "onsite",
-        "employment_type": "full-time"
+        "employment_type": "full-time",
+        "is_remote": False,
+        "visa_sponsorship_available": False
     },
     {
         "title": "DevOps Engineer - Cloud Infrastructure",
@@ -139,7 +147,9 @@ DUMMY_JOBS = [
         "min_years_experience": 3.0,
         "max_years_experience": 8.0,
         "work_arrangement": "remote",
-        "employment_type": "full-time"
+        "employment_type": "full-time",
+        "is_remote": True,
+        "visa_sponsorship_available": True
     },
     {
         "title": "Machine Learning Engineer",
@@ -162,7 +172,9 @@ DUMMY_JOBS = [
         "min_years_experience": 3.0,
         "max_years_experience": 7.0,
         "work_arrangement": "hybrid",
-        "employment_type": "full-time"
+        "employment_type": "full-time",
+        "is_remote": False,
+        "visa_sponsorship_available": True
     }
 ]
 
@@ -414,7 +426,9 @@ async def create_jobs(db):
                 min_years_experience=job_data["min_years_experience"],
                 max_years_experience=job_data["max_years_experience"],
                 work_arrangement=job_data["work_arrangement"],
-                employment_type=job_data["employment_type"]
+                employment_type=job_data["employment_type"],
+                is_remote=job_data.get("is_remote", False),
+                visa_sponsorship_available=job_data.get("visa_sponsorship_available", False)
             )
 
             db.add(job)

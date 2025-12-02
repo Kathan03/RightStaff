@@ -207,6 +207,10 @@ class Job(Base):
     work_arrangement = Column(String)
     employment_type = Column(String)
 
+    # Additional filter fields for chatbot & ranking
+    is_remote = Column(Boolean, default=False, nullable=False)
+    visa_sponsorship_available = Column(Boolean, default=False, nullable=False)
+
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

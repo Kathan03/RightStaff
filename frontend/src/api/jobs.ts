@@ -14,18 +14,18 @@ export const jobsApi = {
     return data;
   },
 
-  // Get all jobs - Note: Backend doesn't have this endpoint
+  // Get all jobs
   getAllJobs: async (): Promise<Job[]> => {
     try {
-      const { data } = await apiClient.get('/api/v1/jobs');
+      const { data } = await apiClient.get('/api/v1/jobs/');
       return data;
     } catch (error) {
-      console.warn('GET /api/v1/jobs not implemented, returning empty array');
+      console.error('Failed to fetch jobs:', error);
       return [];
     }
   },
 
-  // Get job by ID - Note: Backend doesn't have this endpoint
+  // Get job by ID
   getJob: async (jobId: string): Promise<Job> => {
     const { data } = await apiClient.get(`/api/v1/jobs/${jobId}`);
     return data;

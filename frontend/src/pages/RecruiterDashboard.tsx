@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { JobForm } from '../components/recruiter/JobForm';
 import { CandidateRanking } from '../components/recruiter/CandidateRanking';
-import { Chatbot } from '../components/recruiter/Chatbot';
+import { ChatbotWidget } from '../components/shared/ChatbotWidget';
 import { jobsApi } from '../api/jobs';
 import { useRecruiterStore } from '../store/recruiterStore';
 import { Loading } from '../components/shared/Loading';
@@ -242,8 +242,90 @@ export const RecruiterDashboard: React.FC = () => {
         {view === 'create' && <JobForm onSuccess={handleJobCreated} />}
 
         {/* Job Detail View - Rankings, Applicants & Chatbot */}
-        {view === 'detail' && selectedJobId && (
+        {view === 'detail' && selectedJobId && selectedJob && (
           <>
+            {/* Job Information Card */}
+            <div className="card mb-6 bg-gradient-to-br from-primary-50 to-white border-2 border-primary-200">
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 mb-2">
+                    <Briefcase className="w-6 h-6 text-primary-600" />
+                    <h2 className="text-2xl font-bold text-gray-900">{selectedJob.title}</h2>
+                  </div>
+                  {selectedJob.company_name && (
+                    <p className="text-gray-700 font-medium mb-2">{selectedJob.company_name}</p>
+                  )}
+                  <div className="flex flex-wrap gap-3 text-sm text-gray-600">
+                    {selectedJob.location && (
+                      <div className="flex items-center gap-1">
+                        <MapPin className="w-4 h-4" />
+                        <span>{selectedJob.location}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-1">
+                      <Calendar className="w-4 h-4" />
+                      <span>Posted {formatDate(selectedJob.created_at)}</span>
+                    </div>
+                    {selectedJob.min_years_experience && (
+                      <div className="flex items-center gap-1">
+                        <Clock className="w-4 h-4" />
+                        <span>
+                          {selectedJob.min_years_experience}
+                          {selectedJob.max_years_experience && `-${selectedJob.max_years_experience}`} years exp.
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <span
+                  className={`px-3 py-1 rounded-full text-sm font-medium ${
+                    selectedJob.status === 'open'
+                      ? 'bg-green-100 text-green-700 border-2 border-green-200'
+                      : 'bg-gray-100 text-gray-600 border-2 border-gray-200'
+                  }`}
+                >
+                  {selectedJob.status.toUpperCase()}
+                </span>
+              </div>
+
+              <div className="mb-4">
+                <h3 className="text-sm font-semibold text-gray-700 mb-2">Job Description</h3>
+                <p className="text-gray-800 leading-relaxed whitespace-pre-line">{selectedJob.description}</p>
+              </div>
+
+              {selectedJob.required_skills && selectedJob.required_skills.length > 0 && (
+                <div className="mb-4">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-2">Required Skills</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedJob.required_skills.map((skill) => (
+                      <span
+                        key={skill}
+                        className="px-3 py-1 bg-primary-100 text-primary-700 rounded-full text-sm font-medium border border-primary-200"
+                      >
+                        {skill}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedJob.must_have_skills && selectedJob.must_have_skills.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-700 mb-2">Must-Have Skills</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedJob.must_have_skills.map((skill) => (
+                      <span
+                        key={skill}
+                        className="px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm font-medium border border-red-200"
+                      >
+                        {skill}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {error && (
               <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
@@ -259,156 +341,149 @@ export const RecruiterDashboard: React.FC = () => {
               </div>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Left: Tabs for Rankings/Applicants */}
-              <div>
-                {/* Tab Headers */}
-                <div className="flex gap-2 mb-4">
-                  <button
-                    onClick={() => setDetailTab('rankings')}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
-                      detailTab === 'rankings'
-                        ? 'bg-primary-600 text-white'
-                        : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'
-                    }`}
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    AI Rankings ({rankedCandidates.length})
-                  </button>
-                  <button
-                    onClick={() => setDetailTab('applicants')}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
-                      detailTab === 'applicants'
-                        ? 'bg-primary-600 text-white'
-                        : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'
-                    }`}
-                  >
-                    <Users className="w-4 h-4" />
-                    All Applicants ({applicants.length})
-                  </button>
-                </div>
-
-                {/* Tab Content */}
-                {detailTab === 'rankings' && (
-                  <>
-                    {isLoading ? (
-                      <div className="card">
-                        <Loading message="Ranking candidates..." />
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex items-center justify-between mb-4">
-                          <h2 className="text-xl font-bold text-gray-900">AI-Ranked Candidates</h2>
-                          <button
-                            onClick={handleRefreshRankings}
-                            className="text-sm text-primary-600 hover:text-primary-700 font-medium"
-                          >
-                            Refresh
-                          </button>
-                        </div>
-                        <CandidateRanking
-                          candidates={rankedCandidates}
-                          onSelectCandidate={(c) => console.log('Selected:', c)}
-                        />
-                      </>
-                    )}
-                  </>
-                )}
-
-                {detailTab === 'applicants' && (
-                  <>
-                    {loadingApplicants ? (
-                      <div className="card">
-                        <Loading message="Loading applicants..." />
-                      </div>
-                    ) : applicants.length === 0 ? (
-                      <div className="card text-center py-12">
-                        <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-                        <h3 className="text-xl font-semibold text-gray-900 mb-2">No Applicants Yet</h3>
-                        <p className="text-gray-600">
-                          Candidates will appear here once they apply to this job.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        <h2 className="text-xl font-bold text-gray-900">All Applicants</h2>
-                        {applicants.map((applicant) => (
-                          <div key={applicant.application_id} className="card">
-                            <div className="flex justify-between items-start">
-                              <div className="flex-1">
-                                <h4 className="text-lg font-semibold text-gray-900 mb-2">
-                                  {applicant.full_name}
-                                </h4>
-
-                                <div className="space-y-1 text-sm text-gray-600 mb-3">
-                                  {applicant.email && (
-                                    <div className="flex items-center gap-2">
-                                      <Mail className="w-4 h-4" />
-                                      <span>{applicant.email}</span>
-                                    </div>
-                                  )}
-                                  {applicant.phone && (
-                                    <div className="flex items-center gap-2">
-                                      <Phone className="w-4 h-4" />
-                                      <span>{applicant.phone}</span>
-                                    </div>
-                                  )}
-                                  {applicant.location && (
-                                    <div className="flex items-center gap-2">
-                                      <MapPin className="w-4 h-4" />
-                                      <span>{applicant.location}</span>
-                                    </div>
-                                  )}
-                                  {applicant.years_experience && (
-                                    <div className="flex items-center gap-2">
-                                      <Clock className="w-4 h-4" />
-                                      <span>{applicant.years_experience} years experience</span>
-                                    </div>
-                                  )}
-                                </div>
-
-                                {applicant.professional_summary && (
-                                  <p className="text-sm text-gray-700 line-clamp-2">
-                                    {applicant.professional_summary}
-                                  </p>
-                                )}
-                              </div>
-
-                              <div className="ml-4 text-right">
-                                <span
-                                  className={`px-2 py-1 rounded-full text-xs font-medium ${
-                                    applicant.status === 'applied'
-                                      ? 'bg-blue-100 text-blue-700'
-                                      : applicant.status === 'interviewed'
-                                      ? 'bg-yellow-100 text-yellow-700'
-                                      : applicant.status === 'hired'
-                                      ? 'bg-green-100 text-green-700'
-                                      : 'bg-gray-100 text-gray-600'
-                                  }`}
-                                >
-                                  {applicant.status}
-                                </span>
-                                <p className="text-xs text-gray-500 mt-2">
-                                  Applied {formatDate(applicant.applied_at)}
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-
-              {/* Right: Chatbot */}
-              <div>
-                <Chatbot jobId={selectedJobId} />
-              </div>
+            {/* Tab Headers */}
+            <div className="flex gap-2 mb-6">
+              <button
+                onClick={() => setDetailTab('rankings')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                  detailTab === 'rankings'
+                    ? 'bg-primary-600 text-white shadow-md'
+                    : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'
+                }`}
+              >
+                <Sparkles className="w-4 h-4" />
+                AI Rankings ({rankedCandidates.length})
+              </button>
+              <button
+                onClick={() => setDetailTab('applicants')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${
+                  detailTab === 'applicants'
+                    ? 'bg-primary-600 text-white shadow-md'
+                    : 'bg-white text-gray-700 hover:bg-gray-50 border border-gray-300'
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                All Applicants ({applicants.length})
+              </button>
             </div>
+
+            {/* Tab Content */}
+            {detailTab === 'rankings' && (
+              <>
+                {isLoading ? (
+                  <div className="card">
+                    <Loading message="Ranking candidates..." />
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between mb-4">
+                      <h2 className="text-xl font-bold text-gray-900">AI-Ranked Candidates</h2>
+                      <button
+                        onClick={handleRefreshRankings}
+                        className="text-sm text-primary-600 hover:text-primary-700 font-medium"
+                      >
+                        Refresh
+                      </button>
+                    </div>
+                    <CandidateRanking
+                      candidates={rankedCandidates}
+                      onSelectCandidate={(c) => console.log('Selected:', c)}
+                    />
+                  </>
+                )}
+              </>
+            )}
+
+            {detailTab === 'applicants' && (
+              <>
+                {loadingApplicants ? (
+                  <div className="card">
+                    <Loading message="Loading applicants..." />
+                  </div>
+                ) : applicants.length === 0 ? (
+                  <div className="card text-center py-12">
+                    <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                    <h3 className="text-xl font-semibold text-gray-900 mb-2">No Applicants Yet</h3>
+                    <p className="text-gray-600">
+                      Candidates will appear here once they apply to this job.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <h2 className="text-xl font-bold text-gray-900">All Applicants</h2>
+                    {applicants.map((applicant) => (
+                      <div key={applicant.application_id} className="card">
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <h4 className="text-lg font-semibold text-gray-900 mb-2">
+                              {applicant.full_name}
+                            </h4>
+
+                            <div className="space-y-1 text-sm text-gray-600 mb-3">
+                              {applicant.email && (
+                                <div className="flex items-center gap-2">
+                                  <Mail className="w-4 h-4" />
+                                  <span>{applicant.email}</span>
+                                </div>
+                              )}
+                              {applicant.phone && (
+                                <div className="flex items-center gap-2">
+                                  <Phone className="w-4 h-4" />
+                                  <span>{applicant.phone}</span>
+                                </div>
+                              )}
+                              {applicant.location && (
+                                <div className="flex items-center gap-2">
+                                  <MapPin className="w-4 h-4" />
+                                  <span>{applicant.location}</span>
+                                </div>
+                              )}
+                              {applicant.years_experience && (
+                                <div className="flex items-center gap-2">
+                                  <Clock className="w-4 h-4" />
+                                  <span>{applicant.years_experience} years experience</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {applicant.professional_summary && (
+                              <p className="text-sm text-gray-700 line-clamp-2">
+                                {applicant.professional_summary}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="ml-4 text-right">
+                            <span
+                              className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                applicant.status === 'applied'
+                                  ? 'bg-blue-100 text-blue-700'
+                                  : applicant.status === 'interviewed'
+                                  ? 'bg-yellow-100 text-yellow-700'
+                                  : applicant.status === 'hired'
+                                  ? 'bg-green-100 text-green-700'
+                                  : 'bg-gray-100 text-gray-600'
+                              }`}
+                            >
+                              {applicant.status}
+                            </span>
+                            <p className="text-xs text-gray-500 mt-2">
+                              Applied {formatDate(applicant.applied_at)}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </>
         )}
       </div>
+
+      {/* Floating Chatbot Widget - Always accessible when job is selected */}
+      {selectedJobId && <ChatbotWidget jobId={selectedJobId} />}
     </div>
   );
 };

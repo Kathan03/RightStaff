@@ -13,6 +13,7 @@ Features:
 """
 import asyncio
 import json
+import traceback as tb
 from datetime import datetime
 from typing import Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,7 +105,9 @@ class IngestionWorker:
                     # Job failed after max retries - move to DLQ
                     logger.error(f"❌ Job {job_data['job_id']} failed after max retries: {e}")
                     self.jobs_failed += 1
-                    await self._move_to_dlq(job_data, str(e))
+                    # Capture full traceback for debugging
+                    full_traceback = tb.format_exc()
+                    await self._move_to_dlq(job_data, str(e), full_traceback)
                     metrics_collector.increment_counter("ingestion_jobs_failed")
                 
             except Exception as e:
@@ -220,8 +223,8 @@ class IngestionWorker:
                 file_ext = s3_url.split('.')[-1] if '.' in s3_url else 'pdf'
                 file_type = f".{file_ext}"
 
-                text = await parse_resume_text(resume_bytes, file_type)
-                logger.info(f"📄 Parsed resume text ({len(text)} chars)")
+                resume_text = await parse_resume_text(resume_bytes, file_type)  # RENAMED: was 'text'
+                logger.info(f"📄 Parsed resume text ({len(resume_text)} chars)")
 
                 # ══════════════════════════════════════════════════════════════
                 # OPENAI API FIELD EXTRACTION (with spaCy fallback)
@@ -238,13 +241,13 @@ class IngestionWorker:
                         from app.services.llm_parser import get_openai_parser
 
                         llm_parser = get_openai_parser()
-                        llm_result = await llm_parser.parse_resume(text)
+                        llm_result = await llm_parser.parse_resume(resume_text)  # FIXED
 
                         # ══════════════════════════════════════════════════════════════
                         # SKILL EXTRACTION & NORMALIZATION (Unified Pipeline)
                         # ══════════════════════════════════════════════════════════════
                         # Extract skills using OpenAI API (with spaCy fallback)
-                        normalized_skills = await extract_skills(text, use_openai=True)
+                        normalized_skills = await extract_skills(resume_text, use_openai=True)  # FIXED
                         # use_openai=True:  Try OpenAI API, fallback to spaCy if fails
                         # use_openai=False: Use spaCy directly (faster, lower accuracy)
 
@@ -270,7 +273,7 @@ class IngestionWorker:
                             "skills": normalized_skills,  # Normalized through ontology
                             "years_experience": llm_result.get("years_experience"),
                             "location": location_dict,  # Consistent dict format
-                            "professional_summary": llm_result.get("professional_summary") or text[:500],
+                            "professional_summary": llm_result.get("professional_summary") or resume_text[:500],  # FIXED
                             "s3_resume_url": s3_url
                         }
 
@@ -298,11 +301,11 @@ class IngestionWorker:
                     # SKILL EXTRACTION & NORMALIZATION (Unified Pipeline)
                     # ══════════════════════════════════════════════════════════════
                     # Extract skills using spaCy (LLM disabled)
-                    normalized_skills = await extract_skills(text, use_openai=False)
+                    normalized_skills = await extract_skills(resume_text, use_openai=False)  # FIXED
                     # use_openai=False: Use spaCy directly (no API calls)
 
                     # Parse location string to dict (consistent format)
-                    location_str = extract_location(text)
+                    location_str = extract_location(resume_text)  # FIXED
                     location_dict = {"city": None, "region": None, "country": None}
 
                     if location_str:
@@ -318,13 +321,13 @@ class IngestionWorker:
                             location_dict["city"] = parts[0].strip()
 
                     parsed_data = {
-                        "full_name": extract_name(text) or "Unknown",
-                        "email": extract_email(text),
-                        "phone": extract_phone(text),
+                        "full_name": extract_name(resume_text) or "Unknown",  # FIXED
+                        "email": extract_email(resume_text),  # FIXED
+                        "phone": extract_phone(resume_text),  # FIXED
                         "skills": normalized_skills,  # Normalized through ontology
-                        "years_experience": calculate_years_experience(text),
+                        "years_experience": calculate_years_experience(resume_text),  # FIXED
                         "location": location_dict,  # Consistent dict format
-                        "professional_summary": text[:500],
+                        "professional_summary": resume_text[:500],  # FIXED
                         "s3_resume_url": s3_url
                     }
 
@@ -396,15 +399,15 @@ class IngestionWorker:
                 logger.info(f"[3/7] Parsing resume (extracting text)")
                 
                 parsed_data = await parse_resume(resume_bytes, s3_url)
-                text = parsed_data["text"]
+                resume_text = parsed_data["text"]  # RENAMED: was 'text', now 'resume_text' to avoid shadowing sqlalchemy.text
                 metadata = parsed_data["metadata"]
-                
+
                 logger.info(
                     f"✅ Extracted {metadata['char_count']} chars "
                     f"(format: {metadata['format']}, pages: {metadata.get('page_count', 'N/A')})"
                 )
                 metrics_collector.record_timing("ingestion_stage_3_parse", stage_start)
-                
+
                 # ========================================
                 # STAGE 4: Extract fields and skills
                 # ========================================
@@ -417,11 +420,11 @@ class IngestionWorker:
                 if settings.use_llm_parsing:
                     logger.info("Using OpenAI API for skill extraction (with spaCy fallback)")
                     # Extract skills using OpenAI API (falls back to spaCy if fails)
-                    extracted_skills = await extract_skills(text, use_openai=True)
+                    extracted_skills = await extract_skills(resume_text, use_openai=True)
                 else:
                     logger.info("Using spaCy-based extraction (LLM disabled)")
                     # Extract skills using spaCy only
-                    extracted_skills = await extract_skills(text, use_openai=False)
+                    extracted_skills = await extract_skills(resume_text, use_openai=False)
 
                 logger.info(f"✅ Extracted {len(extracted_skills)} skills: {', '.join(extracted_skills[:5])}{'...' if len(extracted_skills) > 5 else ''}")
                 metrics_collector.record_timing("ingestion_stage_4_skills", stage_start)
@@ -511,20 +514,20 @@ class IngestionWorker:
                 # ========================================
                 stage_start = datetime.utcnow()
                 logger.info(f"[5/8] Chunking text (size=400, overlap=50)")
-                
+
                 chunks = chunk_text(
-                    text,
+                    resume_text,  # FIXED: was 'text', now 'resume_text'
                     chunk_size=400,
                     chunk_overlap=50
                 )
-                
+
                 if not chunks:
                     logger.warning(f"⚠️  No chunks generated (text too short?). Skipping embedding.")
                     return
-                
+
                 logger.info(f"✅ Created {len(chunks)} chunks")
                 metrics_collector.record_timing("ingestion_stage_5_chunk", stage_start)
-                
+
                 # ========================================
                 # STAGE 6: Generate embeddings (profile, skills, chunks)
                 # ========================================
@@ -532,7 +535,7 @@ class IngestionWorker:
                 logger.info(f"[6/8] Generating embeddings (1 profile + 1 skills + {len(chunks)} chunks)")
 
                 # 6a. Generate profile embedding (full resume summary)
-                profile_text = f"{candidate.full_name}\n{text[:1000]}"  # Use first 1000 chars as profile
+                profile_text = f"{candidate.full_name}\n{resume_text[:1000]}"  # FIXED: was 'text', now 'resume_text'
                 profile_embedding = await embedding_service.embed_text(profile_text)
 
                 # 6b. Generate skills embedding (extracted skills)
@@ -634,30 +637,34 @@ class IngestionWorker:
                 metrics_collector.increment_counter("ingestion_retries")
                 raise
     
-    async def _move_to_dlq(self, job_data: dict, error_message: str):
+    async def _move_to_dlq(self, job_data: dict, error_message: str, full_traceback: str = None):
         """
         Move failed job to Dead Letter Queue.
-        
+
         Why DLQ?
         - Failed jobs don't get lost
         - Can investigate failures later
         - Can replay jobs after fixing issues
         - Enables alerting on DLQ depth
-        
+
         Args:
             job_data: Original job data
             error_message: Final error message
+            full_traceback: Complete stack trace for debugging
         """
         dlq_entry = {
             **job_data,
             "failed_at": datetime.utcnow().isoformat(),
             "error": error_message,
+            "traceback": full_traceback,
             "final_retry_count": job_data.get("retry_count", 0)
         }
-        
+
         try:
             await redis_client.push_dlq(json.dumps(dlq_entry))
             logger.warning(f"📬 Moved job {job_data['job_id']} to DLQ after {job_data.get('retry_count', 0)} retries")
+            if full_traceback:
+                logger.error(f"Full error traceback:\n{full_traceback}")
         except Exception as e:
             # If DLQ push fails, log the full job data
             logger.error(f"❌ Failed to push to DLQ: {e}")

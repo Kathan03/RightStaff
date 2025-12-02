@@ -10,6 +10,7 @@ from datetime import datetime
 
 from app.api import webhooks, jobs, admin, candidates, chat
 from app.services.ingestion import ingestion_worker
+from app.services.ingestion_monitor import ingestion_monitor
 from app.utils.logging import logger
 from decimal import Decimal
 import json
@@ -48,13 +49,20 @@ app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
 
 @app.on_event("startup")
 async def startup_event():
-    """Start background worker when FastAPI starts."""
+    """Start background worker and monitoring system when FastAPI starts."""
     # Initialize Qdrant collections (candidates_v1 and jobs_v1)
     from app.services.vector_store import vector_store
     vector_store.initialize_collections()
 
+    # Start ingestion worker (processes jobs from queue)
     asyncio.create_task(ingestion_worker.start())
-    logger.info("FastAPI app started with background worker")
+    logger.info("✅ Ingestion worker started")
+
+    # Start ingestion monitor (self-healing system)
+    asyncio.create_task(ingestion_monitor.start())
+    logger.info("✅ Ingestion monitor started (auto-healing enabled)")
+
+    logger.info("🚀 FastAPI app started with background worker and monitoring")
 
 @app.get("/health")
 async def health_check():
