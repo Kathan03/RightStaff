@@ -285,6 +285,9 @@ async def retrieve_context(state: ChatState) -> ChatState:
     """
     Retrieve semantic matches from vector store for semantic queries.
     Uses candidates from job_context to ensure consistency.
+
+    Special handling: If a candidate name is mentioned in the question,
+    ensure that candidate's profile is included in the context.
     """
     if not state['guardrail_passed'] or state['query_type'] != 'semantic':
         return state
@@ -301,6 +304,16 @@ async def retrieve_context(state: ChatState) -> ChatState:
             return state
 
         candidate_ids = [app['candidate_id'] for app in applicants]
+
+        # Check if a specific candidate is mentioned in the question
+        mentioned_candidates = []
+        question_lower = question.lower()
+        for app in applicants:
+            name_lower = app['full_name'].lower()
+            # Check if full name or parts are mentioned
+            if name_lower in question_lower:
+                mentioned_candidates.append(app)
+                logger.info(f"🎯 Candidate mentioned in question: {app['full_name']}")
 
         # Encode question
         question_vec = await embedding_service.embed_text(question)
@@ -319,6 +332,8 @@ async def retrieve_context(state: ChatState) -> ChatState:
 
         # Match with full candidate data from job_context
         context = []
+        seen_candidate_ids = set()
+
         for hit in results:
             cand_id = hit.payload.get("candidate_id", "")
 
@@ -338,9 +353,24 @@ async def retrieve_context(state: ChatState) -> ChatState:
                     "professional_summary": candidate_data['professional_summary'],
                     "score": hit.score
                 })
+                seen_candidate_ids.add(cand_id)
+
+        # IMPORTANT: If a candidate was mentioned but not in top results, add them explicitly
+        for mentioned in mentioned_candidates:
+            if mentioned['candidate_id'] not in seen_candidate_ids:
+                logger.info(f"⚡ Adding mentioned candidate to context: {mentioned['full_name']}")
+                context.insert(0, {  # Insert at beginning (high priority)
+                    "text": mentioned.get('professional_summary', '')[:500],
+                    "candidate_id": mentioned['candidate_id'],
+                    "full_name": mentioned['full_name'],
+                    "skills": [s['name'] for s in mentioned['skills']],
+                    "years_experience": mentioned['years_experience'],
+                    "professional_summary": mentioned['professional_summary'],
+                    "score": 1.0  # Highest score (explicitly requested)
+                })
 
         state['context'] = context
-        logger.info(f"📚 Retrieved {len(context)} semantic matches")
+        logger.info(f"📚 Retrieved {len(context)} semantic matches ({len(mentioned_candidates)} explicitly mentioned)")
 
     except Exception as e:
         logger.error(f"❌ Context retrieval error: {e}")
@@ -381,8 +411,13 @@ Total Applicants: {len(applicants)}
             system_msg = {
                 "role": "system",
                 "content": (
-                    "You are a recruitment assistant. Answer the user's question "
-                    "using the provided data. Always use candidate NAMES. Be concise and professional."
+                    "You are a professional recruitment assistant helping with candidate screening.\n\n"
+                    "INSTRUCTIONS:\n"
+                    "- Answer questions using the provided data\n"
+                    "- ALWAYS use candidate FULL NAMES (never IDs or 'candidate X')\n"
+                    "- When listing candidates, format as a numbered list\n"
+                    "- Be concise, accurate, and helpful\n"
+                    "- If asked about counts, provide the exact number from the data"
                 )
             }
 
@@ -393,31 +428,54 @@ Total Applicants: {len(applicants)}
         else:
             # Semantic search response
             if state['context']:
-                # Use semantic matches
+                # Use semantic matches with full skill lists
                 context_text = "\n\n".join([
                     f"**{c['full_name']}**\n"
-                    f"Experience: {c.get('years_experience', 0)} years\n"
-                    f"Top Skills: {', '.join(c['skills'][:5]) if c['skills'] else 'N/A'}\n"
-                    f"Summary: {c.get('professional_summary', 'N/A')[:200]}\n"
-                    f"Relevant Info: {c['text'][:300]}"
+                    f"Years Experience: {c.get('years_experience', 0)}\n"
+                    f"Skills: {', '.join(c['skills']) if c['skills'] else 'None listed'}\n"
+                    f"Summary: {c.get('professional_summary', 'N/A')[:300]}\n"
+                    f"Additional Context: {c['text'][:400]}"
                     for c in state['context'][:5]
                 ])
             else:
-                # Use all applicants if no semantic matches
+                # Use all applicants if no semantic matches (fallback)
                 context_text = "\n\n".join([
                     f"**{app['full_name']}**\n"
-                    f"Experience: {app.get('years_experience', 0)} years\n"
-                    f"Top Skills: {', '.join([s['name'] for s in app.get('skills', [])[:5]])}\n"
-                    f"Summary: {app.get('professional_summary', 'N/A')[:200]}"
+                    f"Years Experience: {app.get('years_experience', 0)}\n"
+                    f"Skills: {', '.join([s['name'] for s in app.get('skills', [])])}\n"
+                    f"Summary: {app.get('professional_summary', 'N/A')[:300]}"
                     for app in applicants[:10]
                 ])
 
             system_msg = {
                 "role": "system",
                 "content": (
-                    "You are a recruitment assistant for a specific job. Answer based on provided context. "
-                    "ALWAYS use candidate FULL NAMES (not IDs or 'candidate X'). Reference their specific "
-                    "skills and experience. Be concise and professional."
+                    "You are a conservative, evidence-based recruitment assistant.\n\n"
+                    "ROLE: Analyze candidates for the job based ONLY on provided context.\n\n"
+                    "EVALUATION GUIDELINES:\n"
+                    "1. REQUIRED SKILLS MATCH:\n"
+                    "   - Compare candidate's skills against job's Required Skills\n"
+                    "   - If candidate HAS a required skill → STATE IT as a strength\n"
+                    "   - If candidate LACKS a required skill → EXPLICITLY state it as a gap\n"
+                    "   - NEVER assume experience in skills not mentioned\n\n"
+                    "2. EXPERIENCE ASSESSMENT:\n"
+                    "   - Reference candidate's years_experience and professional_summary\n"
+                    "   - Match experience level to job requirements\n"
+                    "   - Be specific about relevant projects/roles if mentioned\n\n"
+                    "3. FIT ANALYSIS FORMAT:\n"
+                    "   - Start with candidate's FULL NAME (never IDs or 'candidate X')\n"
+                    "   - List STRENGTHS with evidence (e.g., 'Has PyTorch and Python skills')\n"
+                    "   - List GAPS with honesty (e.g., 'Missing: AWS experience')\n"
+                    "   - Provide a BALANCED assessment\n\n"
+                    "4. CONSERVATIVE APPROACH:\n"
+                    "   - Only claim what's explicitly stated in the context\n"
+                    "   - If a skill isn't listed, it's a gap (don't guess)\n"
+                    "   - Focus on job-relevant qualifications only\n\n"
+                    "EXAMPLE:\n"
+                    "\"Alex Chen is a strong fit for Machine Learning Engineer:\n"
+                    "✓ Strengths: Has Python, PyTorch, and Machine Learning skills (required). 5 years ML experience.\n"
+                    "✗ Gaps: No mention of AWS or Docker experience (required skills).\n"
+                    "Overall: Strong technical foundation but may need training on infrastructure.\""
                 )
             }
 

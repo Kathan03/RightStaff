@@ -1,0 +1,32 @@
+JORDAN SMITH
+San Francisco, CA | (415) 555-0101 | jordan.smith@example.com
+
+PROFESSIONAL SUMMARY
+Data Scientist with 5+ years of experience leveraging machine learning and statistical analysis to drive product innovation. Expert in Python, SQL, and A/B testing with a focus on consumer behavior and payment systems. Proven ability to translate complex datasets into strategic business insights.
+
+EXPERIENCE
+
+Senior Data Analyst | Fintech Solutions Inc.
+San Francisco, CA | 2021 – Present
+- Led the design and analysis of over 50 A/B tests to optimize the user checkout flow, resulting in a 12% increase in conversion rates.
+- Developed a churn prediction model using Python (Random Forest) that identified at-risk users with 85% accuracy, enabling targeted retention campaigns.
+- Built automated ETL pipelines using Spark and SQL to process terabytes of transaction data daily.
+- Partnered with Product Managers to define key success metrics (KPIs) for new feature launches.
+
+Data Scientist | TechStream Media
+Austin, TX | 2019 – 2021
+- Conducted exploratory data analysis on user engagement patterns to inform the product roadmap.
+- Created interactive Tableau dashboards to monitor daily active users (DAU) and retention cohorts.
+- Utilized SQL window functions to analyze user sessions and identify friction points in the onboarding process.
+
+EDUCATION
+Master of Science in Data Science
+University of California, Berkeley | 2019
+
+Bachelor of Science in Statistics
+University of Texas at Austin | 2017
+
+TECHNICAL SKILLS
+Languages: Python (Pandas, NumPy, Scikit-Learn), SQL, R
+Tools: Tableau, Spark, Hadoop, Git, Jupyter
+Methodologies: A/B Testing, Regression Analysis, Hypothesis Testing, Machine Learning
