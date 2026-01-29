@@ -269,6 +269,8 @@ CREATE TABLE IF NOT EXISTS job (
   max_years_experience    numeric(5,2),
   work_arrangement        text,
   employment_type         text,
+  is_remote               boolean DEFAULT false,
+  visa_sponsorship_available boolean DEFAULT false,
 
   created_at              timestamptz NOT NULL DEFAULT now(),
   updated_at              timestamptz NOT NULL DEFAULT now()

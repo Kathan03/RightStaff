@@ -1,405 +1,604 @@
-# 🚀 RightStaff AI Backend
+# RightStaff - AI-Powered Candidate Ranking System
 
-Production-grade AI candidate ranking engine with semantic search, structured scoring, and explainable results.
-
----
-
-## 📍 Current Status: **Days 1-4 Complete (Core MVP Functional)** ✅
-
-**What Works Now:**
-- ✅ Full ingestion pipeline: Resume upload → Parse → Embed → Store
-- ✅ Semantic ranking with dual job embeddings (profile + skills)
-- ✅ Ontology-based skill filtering with spaCy NER
-- ✅ Score blending (dense + structured + completeness)
-- ✅ Explainable results with evidence citations
-- ✅ Production-ready: Docker Compose, health checks, comprehensive tests
-
-**Next Steps (Days 5-8):**
-- ⏳ Cross-encoder re-ranking for accuracy boost
-- ⏳ WebSocket chatbot with RAG pipeline
-- ⏳ LLM-powered explanations
-- ⏳ Redis caching for performance
-
-📖 **See [PROJECT_STATUS.md](PROJECT_STATUS.md) for detailed feature audit**
+**RightStaff** is an intelligent recruitment platform that uses Retrieval-Augmented Generation (RAG) and semantic search to match candidates with job openings. The system automatically parses resumes, extracts skills, generates embeddings, and ranks candidates based on job requirements.
 
 ---
 
-## 🎯 Features Implemented (Days 1-4 Complete)
+## 🎯 Project Overview
 
-### ✅ Currently Working Features
+RightStaff transforms traditional applicant tracking by combining:
+- **Resume parsing** with PDF/DOCX support
+- **Semantic search** using vector embeddings
+- **AI-powered skill extraction** with OpenAI and spaCy
+- **Multi-stage ranking** with hybrid search and cross-encoder re-ranking
+- **Auto-healing ingestion** pipeline with retry mechanisms
 
-- **Semantic Candidate Ranking**: Dense retrieval using sentence-transformers (all-MiniLM-L6-v2) with Qdrant vector search
-- **Ontology-Based Filtering**: Must-have skills gate using spaCy NER and pattern matching
-- **Structured Scoring**: Years of experience, profile completeness, and location matching
-- **Score Blending**: Configurable weights (40% dense + 35% structured + 25% completeness)
-- **Candidate Banding**: High (top 20%), Medium (20-60%), Low (bottom 40%) confidence bands
-- **Explainable Results**: Rule-based explanations with evidence citations from resume chunks
-- **Dual Job Embeddings**: Separate vectors for job profile and required skills for better matching
-- **Webhook Integration**: Async resume processing via Redis queues
-- **7-Stage Ingestion Pipeline**: Webhook → Parse → Chunk → Embed → Store → Rank → Explain
-- **Production-Ready Infrastructure**: Health checks, structured logging, comprehensive error handling
+The system maintains three types of vector representations per candidate:
+1. **Profile vectors** - Full resume summary
+2. **Skills vectors** - Extracted competencies
+3. **Chunk vectors** - Resume text segments for context retrieval
 
-### 🔮 Planned Features (Days 5-12)
+---
 
-- **Cross-Encoder Re-Ranking**: Pairwise scoring using bge-reranker-base for improved accuracy (placeholder exists)
-- **RAG Chatbot with WebSocket**: Job-scoped Q&A grounded in candidate data with real-time streaming (placeholder exists)
-- **LLM-Powered Explanations**: Agent-based explanation generation with deeper context (enhancement)
-- **Multi-Agent Chatbot**: Collaborative agents for conversation context (enhancement)
-- **Email Drafting**: Automated candidate outreach generation (placeholder exists)
-
-## 🏗️ Architecture (Current Implementation)
+## 🏗️ Architecture
 
 ```
-Portal Team → Webhook → AI Team (This Repo)
-                 ↓
-           [Redis Queue]
-                 ↓
-    Resume → Parse → Chunk → Embed → Store in Qdrant
-                                      ↓
-    Job Description → Dual Embeddings (Profile + Skills)
-                                      ↓
-              Dense Retrieval (Qdrant Vector Search)
-                                      ↓
-              Structured Scoring (Years, Completeness)
-                                      ↓
-              Score Blending (Weighted Combination)
-                                      ↓
-              Candidate Banding (High/Medium/Low)
-                                      ↓
-              Explainable Results (Rule-Based Citations)
+┌─────────────────────────────────────────────────────────────────┐
+│                        Frontend (React)                          │
+│  - Candidate Upload   - Job Management   - Ranking Dashboard   │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │ REST API
+┌───────────────────────────▼─────────────────────────────────────┐
+│                     FastAPI Backend                              │
+│  - API Endpoints   - Ingestion Worker   - Auto-Healing Monitor │
+└──┬────────┬────────┬────────┬─────────┬────────────────────────┘
+   │        │        │        │         │
+   ▼        ▼        ▼        ▼         ▼
+┌─────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐
+│PostgreSQL│Qdrant│ MinIO │ Redis │OpenAI│
+│ (OLTP) │(Vector)│(S3)  │(Queue)│ API  │
+└─────┘ └──────┘ └──────┘ └──────┘ └──────┘
 ```
 
-## 🛠️ Tech Stack
+---
 
-**Current MVP (Days 1-4 Complete):**
-- **Backend**: FastAPI (async), Python 3.11+
-- **Database**: PostgreSQL 18 (rightstaff schema)
-- **Vector Store**: Qdrant v1.7.0
-- **Cache/Queue**: Redis 7.2
-- **Object Storage**: MinIO (S3-compatible)
-- **Embeddings**: sentence-transformers (all-MiniLM-L6-v2)
-- **NLP**: spaCy (en_core_web_sm) for skill extraction
-- **Parsing**: Python chardet for text parsing
-- **Container**: Docker Compose
+## 🛠️ Technology Stack
 
-**Future Production Enhancements:**
-- Pinecone (managed vector DB) or AWS OpenSearch
-- AWS S3, ElastiCache (managed Redis)
-- OpenAI embeddings (ada-002) for better semantic understanding
-- Cross-encoder models for re-ranking
-- LLM agents for explanations and chatbot
-- Kubernetes/ECS deployment
+### **Backend**
+| Technology | Version | Purpose | Why We Use It |
+|------------|---------|---------|---------------|
+| **Python** | 3.11+ | Core language | Excellent AI/ML ecosystem |
+| **FastAPI** | Latest | Web framework | Async support, automatic API docs, type safety |
+| **SQLAlchemy** | 2.0+ | ORM | AsyncPG support, declarative models |
+| **asyncpg** | Latest | PostgreSQL driver | High-performance async queries |
+| **Pydantic** | 2.0+ | Data validation | Type safety, environment config |
+| **Tenacity** | Latest | Retry logic | Resilient background jobs |
+| **Structlog** | Latest | Logging | JSON structured logs, context binding |
 
-## 🚀 Quick Start
+### **AI/ML Frameworks**
+| Technology | Version | Purpose | Why We Use It |
+|------------|---------|---------|---------------|
+| **sentence-transformers** | Latest | Embeddings | Fast, local semantic embeddings (384-dim) |
+| **spaCy** | 3.7+ | NLP | Skill extraction fallback, entity recognition |
+| **OpenAI API** | Latest | LLM parsing | GPT-4 for resume parsing, skill extraction |
+| **pypdf** | Latest | PDF parsing | Extract text from resume PDFs |
+| **python-docx** | Latest | DOCX parsing | Extract text from Word resumes |
 
-### Prerequisites
-- Docker Desktop (with WSL2 backend)
-- Python 3.11+
-- 8GB RAM (16GB recommended)
+### **Databases & Storage**
+| Technology | Version | Purpose | Why We Use It |
+|------------|---------|---------|---------------|
+| **PostgreSQL** | 18 | OLTP database | ACID compliance, JSONB support, proven reliability |
+| **Qdrant** | 1.7+ | Vector database | Fast cosine similarity search, collection management |
+| **MinIO** | Latest | Object storage | S3-compatible, self-hosted resume storage |
+| **Redis** | 7.2+ | Cache & queue | Job queue, parsed data cache, job embeddings cache |
 
-### Setup
+### **Frontend**
+| Technology | Version | Purpose | Why We Use It |
+|------------|---------|---------|---------------|
+| **React** | 19+ | UI framework | Component reusability, large ecosystem |
+| **TypeScript** | 4.9+ | Type safety | Catch errors at compile time |
+| **React Router** | 6.30+ | Client routing | SPA navigation |
+| **Zustand** | 5.0+ | State management | Lightweight alternative to Redux |
+| **React Hook Form** | 7.66+ | Form handling | Performance, validation with Zod |
+| **Axios** | 1.13+ | HTTP client | Promise-based, interceptors |
+| **Tailwind CSS** | 3.4+ | Styling | Utility-first, rapid development |
+| **Lucide React** | Latest | Icons | Modern, consistent icon set |
 
+### **Infrastructure**
+| Technology | Purpose |
+|------------|---------|
+| **Docker Compose** | Multi-container orchestration |
+| **Docker** | Containerization |
+
+---
+
+## 📊 Database Schema
+
+### **PostgreSQL (OLTP)**
+
+#### Core Tables
+```sql
+-- Candidates
+candidate (id, full_name, years_experience, professional_summary, created_at, updated_at)
+candidate_contact (candidate_id PK, email, phone, city, region, country)
+candidate_preference (candidate_id PK, work_authorization, work_arrangement, desired_salary_min/max, open_to_remote)
+candidate_demographics (candidate_id PK, disability, ethnicity, veteran_status)
+candidate_resume (id, candidate_id, s3_url, file_type, is_latest, uploaded_at)
+
+-- Experience & Education
+candidate_experience (id, candidate_id, title, company, employment_type, start_date, end_date, description, industry)
+candidate_education (id, candidate_id, degree, institution, field_of_study, graduation_year, gpa, honors)
+candidate_certification (id, candidate_id, name, issuer, issued_on, expires_on, credential_url)
+
+-- Skills (Many-to-Many)
+skill (id, name UNIQUE, parent_skill_id)
+skill_synonym (id, skill_id, synonym)
+candidate_skill (candidate_id, skill_id, level, years)  -- PK: (candidate_id, skill_id)
+
+-- Jobs & Applications
+job (id, title, description, department, location, status, required_skills_json, must_have_skills_json,
+     min_years_experience, max_years_experience, work_arrangement, employment_type,
+     is_remote, visa_sponsorship_available, created_at, updated_at)
+application (id, candidate_id, job_id, status, applied_at, updated_at)  -- UNIQUE: (candidate_id, job_id)
+
+-- Enums
+job_status_enum: 'draft', 'open', 'on_hold', 'closed', 'filled'
+application_status_enum: 'sourced', 'applied', 'screen', 'shortlist', 'interview', 'offer', 'hired', 'rejected', 'withdrawn'
+employment_type_enum: 'full_time', 'contract', 'internship', 'freelance'
+work_arrangement_enum: 'Remote', 'Hybrid', 'On-site'
+```
+
+**Schema Name:** `rightstaff`
+**User:** `right_staff`
+
+### **Qdrant (Vector Database)**
+
+#### Collection: `candidates_v1`
+- **Vector Size:** 384 dimensions
+- **Distance Metric:** Cosine similarity
+- **Vectors per Candidate:**
+  - 1 profile vector (full resume summary)
+  - 1 skills vector (concatenated skills)
+  - N chunk vectors (resume text chunks, 400 chars with 50 char overlap)
+
+**Payload Schema:**
+```json
+{
+  "candidate_id": "uuid",
+  "kind": "profile | skills | chunk",
+  "full_name": "string",
+  "text": "string (snippet for profile/chunk)",
+  "skills": ["skill1", "skill2"],
+  "skills_count": "int (for skills kind)",
+  "chunk_index": "int (for chunk kind)",
+  "chunk_text": "string (for chunk kind)",
+  "start_char": "int",
+  "end_char": "int",
+  "char_count": "int",
+  "filename": "string",
+  "created_at": "ISO timestamp"
+}
+```
+
+#### Collection: `jobs_v1`
+- **Vector Size:** 384 dimensions
+- **Vectors per Job:**
+  - 1 profile vector (title + description)
+  - 1 skills vector (must-have 3x weighted + nice-to-have)
+
+**Payload Schema:**
+```json
+{
+  "job_id": "uuid",
+  "title": "string",
+  "kind": "profile | skills",
+  "required_skills": ["skill1", "skill2"],
+  "must_have_skills": ["skill1"],
+  "created_at": "ISO timestamp"
+}
+```
+
+### **MinIO (Object Storage)**
+- **Bucket:** `rightstaff-resumes`
+- **Path Structure:** `resumes/{candidate_uuid}/resume.{ext}`
+- **Supported Formats:** PDF, DOCX, DOC, TXT
+- **Access:** Private (pre-signed URLs on demand)
+
+### **Redis (Cache & Queue)**
+- **Queue:** `ingestion_queue` (job processing)
+- **DLQ:** `ingestion_queue_dlq` (failed jobs)
+- **Cache Keys:**
+  - `parsed_candidate:{temp_id}` (TTL: 1 hour) - Parse-only results
+  - `job_embeddings:{job_id}:{hash}` (TTL: 1 hour) - Cached job vectors
+
+---
+
+## 🤖 RAG & Ingestion Pipeline
+
+### **How RAG is Enabled**
+
+RightStaff implements a **hybrid RAG approach**:
+
+1. **Semantic Search (Vector Retrieval)**
+   - Query job requirements → Generate embedding
+   - Search Qdrant for top N candidates by cosine similarity
+   - Retrieve profile, skills, and chunk vectors
+
+2. **Keyword Matching (SQL Filters)**
+   - Filter candidates by must-have skills (PostgreSQL JSONB)
+   - Apply experience range constraints
+   - Check work authorization, location preferences
+
+3. **Context Augmentation**
+   - Retrieved candidate profiles + resume chunks
+   - Job description + requirements
+   - Skill overlap analysis
+
+4. **Cross-Encoder Re-Ranking**
+   - Re-rank top candidates using `cross-encoder/ms-marco-MiniLM-L-6-v2`
+   - Considers full context (query + candidate profile)
+   - Produces final ranked list
+
+### **Ingestion Pipeline Architecture**
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    INGESTION PIPELINE (8 STAGES)                  │
+└──────────────────────────────────────────────────────────────────┘
+
+Stage 1: API Receives Resume Upload
+   ↓ (POST /api/v1/candidates/upload-resume)
+   - Validate file type (PDF/DOCX/TXT)
+   - Generate temp_id (UUID)
+   - Upload to MinIO: s3://rightstaff-resumes/resumes/{temp_id}/resume.pdf
+
+Stage 2: Queue Parse-Only Job
+   ↓ (LPUSH to Redis ingestion_queue)
+   - Job: {"job_id": "parse_{temp_id}", "mode": "parse_only", "s3_url": "..."}
+
+Stage 3: Background Worker Picks Job
+   ↓ (Ingestion Worker BRPOP from queue)
+   - Download resume from MinIO
+   - Extract text (pypdf/python-docx)
+
+Stage 4: Parse Resume (LLM or spaCy)
+   ↓ (OpenAI GPT-4 or spaCy fallback)
+   - Extract: name, email, phone, experience, education, skills
+   - Cache parsed data in Redis (TTL: 1 hour)
+   - Return parsed data to API
+
+Stage 5: User Submits Candidate Form
+   ↓ (POST /api/v1/candidates/ with temp_id + form data)
+   - Create Candidate record in PostgreSQL
+   - Create CandidateContact, CandidatePreference, etc.
+   - Queue FULL ingestion job
+
+Stage 6: Full Ingestion Processing
+   ↓ (Background worker processes full ingestion)
+   a) Fetch candidate details from PostgreSQL
+   b) Download resume from MinIO
+   c) Parse resume text
+   d) Extract skills (OpenAI or spaCy)
+   e) Store skills in PostgreSQL (candidate_skill table)
+   f) Chunk resume text (400 chars, 50 overlap)
+   g) Generate embeddings (sentence-transformers)
+   h) Store vectors in Qdrant (profile + skills + chunks)
+
+Stage 7: Auto-Healing Monitor (Every 5 Minutes)
+   ↓ (Ingestion Monitor background task)
+   - Query PostgreSQL for all candidates with resumes
+   - Check Qdrant for missing vectors
+   - Auto-queue missing candidates for re-ingestion
+
+Stage 8: Failure Handling
+   ↓ (Tenacity retry with exponential backoff)
+   - Retry failed jobs (max 5 attempts)
+   - Move exhausted jobs to DLQ
+   - Log errors with full traceback
+```
+
+### **When Pipelines Activate**
+
+| Trigger | Pipeline | Mode | Result |
+|---------|----------|------|--------|
+| **Resume Upload** | Parse-only | Anonymous | Cached parsed data for form pre-fill |
+| **Candidate Creation** | Full ingestion | Authenticated | Complete profile with vectors in Qdrant |
+| **Profile Update Webhook** | Full re-ingestion | External | Re-embed updated profile |
+| **Missing Vectors Detected** | Auto-healing | System | Self-repair for failed ingestions |
+| **Job Creation** | Job embeddings | System | Generate job vectors for matching |
+
+---
+
+## 🚀 Setup Guide (New Desktop)
+
+### **Prerequisites**
+- Docker Desktop installed
+- Python 3.11+ installed
+- Node.js 16+ and npm installed
+- Git installed
+
+---
+
+### **Step 1: Clone Repository**
 ```bash
-# Clone repository
-git clone <repo-url>
-cd rightstaff-ai
+git clone <repository-url>
+cd RightStaff
+```
 
-# Start all services (Docker + Python setup)
-make setup
+---
 
-# Start backend server
+### **Step 2: Start Docker Services**
+```bash
+cd docker
+docker-compose up -d
+```
+
+**Services Started:**
+- PostgreSQL (port 5433)
+- Qdrant (port 6333)
+- Redis (port 6379)
+- MinIO (port 9000, console 9001)
+
+**Wait 10 seconds for services to initialize.**
+
+---
+
+### **Step 3: Setup Backend**
+
+#### a) Create Python Virtual Environment
+```bash
+cd ../backend
+python -m venv venv
+```
+
+#### b) Activate Virtual Environment
+**Windows:**
+```bash
+venv\Scripts\activate
+```
+
+**macOS/Linux:**
+```bash
+source venv/bin/activate
+```
+
+#### c) Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+#### d) Download spaCy Model
+```bash
+python -m spacy download en_core_web_sm
+```
+
+#### e) Configure Environment Variables
+Edit `backend/.env`:
+```env
+# OpenAI API Key (required for LLM parsing)
+OPENAI_API_KEY=sk-your-key-here
+
+# Database (already configured for Docker)
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5433
+POSTGRES_DB=rightstaff
+POSTGRES_USER=right_staff
+POSTGRES_PASSWORD=dev_password_123
+
+# Other services (defaults work with Docker)
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+REDIS_HOST=localhost
+REDIS_PORT=6379
+MINIO_ENDPOINT=localhost:9000
+MINIO_BUCKET=rightstaff-resumes
+```
+
+#### f) Populate Database with Test Data
+```bash
+python populate_dummy_data.py
+```
+
+**Expected Output:**
+```
+✅ Jobs: 6
+✅ Candidates: 8
+✅ Skills: 49
+✅ Candidate Vectors: 24
+✅ Resumes in MinIO: 5
+```
+
+#### g) Verify Database
+```bash
+python check_database.py
+```
+
+**Expected Output:**
+```
+Applications: 48
+Jobs: 6
+Candidates: 8
+```
+
+---
+
+### **Step 4: Setup Frontend**
+
+#### a) Install Dependencies
+```bash
+cd ../frontend
+npm install
+```
+
+#### b) Configure API Endpoint
+Edit `frontend/src/config.ts` (if needed):
+```typescript
+export const API_BASE_URL = 'http://localhost:8000';
+```
+
+---
+
+### **Step 5: Start the Application**
+
+#### a) Start Backend (Terminal 1)
+```bash
 cd backend
-source ../venv/bin/activate  # On Windows: ..\venv\Scripts\activate
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-### Verify Installation
+**Backend will be available at:** http://localhost:8000
+**API Docs:** http://localhost:8000/docs
 
+#### b) Start Frontend (Terminal 2)
 ```bash
-# Health check
-curl http://localhost:8000/health
-
-# Access points
-- API Docs: http://localhost:8000/docs
-- Qdrant Dashboard: http://localhost:6333/dashboard
-- MinIO Console: http://localhost:9001
+cd frontend
+npm start
 ```
 
-## 📋 Available Commands
+**Frontend will be available at:** http://localhost:3000
 
+---
+
+### **Step 6: Verify Everything Works**
+
+1. **Open Frontend:** http://localhost:3000
+2. **Check API Health:** http://localhost:8000/health
+3. **View API Docs:** http://localhost:8000/docs
+4. **MinIO Console:** http://localhost:9001 (minioadmin / minioadmin123)
+
+---
+
+## 🧪 Testing the System
+
+### **1. Upload a Resume**
+- Navigate to "Upload Resume" page
+- Drag & drop a PDF/DOCX resume
+- System will parse and extract data
+- Fill candidate form with parsed data
+- Submit to create candidate profile
+
+### **2. Create a Job Posting**
+- Navigate to "Jobs" page
+- Click "Create Job"
+- Fill in job details and required skills
+- Submit to create job with embeddings
+
+### **3. Rank Candidates**
+- Navigate to "Ranking" page
+- Select a job
+- System will rank all candidates
+- View ranked results with scores
+
+---
+
+## 🔧 Useful Commands
+
+### **Clear All Data**
 ```bash
-make help      # Show all commands
-make start     # Start Docker services
-make stop      # Stop Docker services
-make logs      # View Docker logs
-make test      # Run pytest suite
-make clean     # Remove all data (destructive)
+cd backend
+python clear_all_data.py
 ```
 
-## 📚 Documentation
-
-- **[PROJECT_STATUS.md](PROJECT_STATUS.md)** - Complete feature audit, implementation status, and roadmap
-- **[TESTING_GUIDE.md](TESTING_GUIDE.md)** - Comprehensive testing guide with all test scenarios
-- **[DATABASE_SETUP.md](DATABASE_SETUP.md)** - Database schema and setup instructions
-- **[API Documentation](http://localhost:8000/docs)** - Interactive Swagger UI (available when server is running)
-- **[PROJECT_STRUCTURE_GUIDE.md](PROJECT_STRUCTURE_GUIDE.md)** - Codebase organization and architecture
-
-## 🧪 Testing
-
-### Pytest Suite (Unit & Integration Tests)
-
+### **Re-populate Test Data**
 ```bash
-# Run all pytest tests
-pytest backend/tests/ -v
-
-# Run specific test categories
-pytest backend/tests/ -m unit       # Unit tests only
-pytest backend/tests/ -m integration # Integration tests only
-
-# Run specific test files
-pytest backend/tests/test_ranking.py -v
-pytest backend/tests/test_vector_store.py -v
-pytest backend/tests/test_ontology.py -v
-pytest backend/tests/test_embeddings.py -v
-pytest backend/tests/test_parsers.py -v
-pytest backend/tests/test_fairness.py -v
-
-# Coverage report
-pytest backend/tests/ -v --cov=backend/app --cov-report=html
+python populate_dummy_data.py
 ```
 
-### Standalone Test Scripts (Quick Validation)
-
-These can be run directly with Python for quick validation:
-
+### **Check Database State**
 ```bash
-# Quick API health check
-python backend/test_api_quick.py
-
-# End-to-end ranking test with real data
-python backend/test_day4_e2e_adaptive.py
-
-# Quick Day 4 feature validation
-python backend/test_day4_quick.py
-
-# Database connection and data check
-python backend/check_database.py
-
-# Comprehensive diagnostics
-python backend/diagnose_all.py
+python check_database.py
 ```
 
-### Database Management
-
+### **Stop Docker Services**
 ```bash
-# Populate with dummy test data
-python backend/populate_dummy_data.py
-
-# Clear all data (destructive)
-python backend/clear_all_data.py
+cd docker
+docker-compose down
 ```
 
-See [TESTING_GUIDE.md](TESTING_GUIDE.md) for detailed test scenarios and workflows.
+### **View Docker Logs**
+```bash
+docker-compose logs -f postgres
+docker-compose logs -f qdrant
+```
 
-## 🔌 API Endpoints (Currently Available)
+---
 
-### Operational Endpoints
+## 📁 Project Structure
 
-- **GET /health** - Service health check with database, Qdrant, Redis, MinIO status
-- **GET /docs** - Interactive Swagger UI documentation
-- **GET /redoc** - ReDoc API documentation
+```
+RightStaff/
+├── backend/              # FastAPI backend application
+│   ├── app/
+│   │   ├── api/         # API route handlers
+│   │   ├── models/      # SQLAlchemy ORM models
+│   │   ├── services/    # Business logic (ingestion, ranking, embeddings)
+│   │   ├── utils/       # Utilities (logging, parsing)
+│   │   ├── config.py    # Pydantic settings
+│   │   ├── database.py  # Database connection
+│   │   └── main.py      # FastAPI app entry point
+│   ├── clear_all_data.py
+│   ├── populate_dummy_data.py
+│   ├── check_database.py
+│   └── requirements.txt
+├── frontend/             # React TypeScript frontend
+│   ├── src/
+│   │   ├── components/  # React components
+│   │   ├── pages/       # Page components
+│   │   ├── store/       # Zustand state management
+│   │   ├── types/       # TypeScript type definitions
+│   │   └── App.tsx
+│   └── package.json
+├── database/
+│   └── scripts/
+│       ├── 01_schema.sql          # PostgreSQL schema (ESSENTIAL)
+│       ├── 00_rollback.sql        # Drop all tables
+│       └── 03_postseed_helpers.sql # Helper functions
+├── docker/
+│   ├── docker-compose.yml
+│   └── .env.docker
+└── README.md
+```
 
-### Ranking Endpoints
+For detailed file-by-file documentation, see **[PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md)**.
 
-- **POST /jobs/{job_id}/rank** - Rank candidates for a specific job
-  - Returns: Top candidates with scores, bands (High/Medium/Low), and explanations
-  - Score breakdown: Dense retrieval + Structured scoring + Completeness
-  - Evidence citations for each candidate
+---
 
-### Planned Endpoints (Not Yet Implemented)
+## 🐛 Troubleshooting
 
-- **POST /jobs/{job_id}/chat** - WebSocket chatbot for job-scoped Q&A (placeholder exists)
-- **GET /candidates/{candidate_id}** - Get candidate details (placeholder exists)
-- **POST /candidates/{candidate_id}/email** - Generate outreach email (not implemented)
+### **Port Already in Use**
+If PostgreSQL port 5432 is taken:
+- We use 5433 by default (already configured)
+- Or stop local PostgreSQL service
 
-## 📊 Success Metrics (Current Status)
+### **OpenAI API Rate Limits**
+- System falls back to spaCy for skill extraction
+- LLM parsing is optional (set `USE_LLM_PARSING=false` in .env)
 
-- **Ranking Quality**: Agent thumbs-up rate ≥80% (baseline established, feedback loop pending)
-- **Performance**:
-  - ✅ Ranking latency: ~2-3s for 10 candidates (goal: <5s)
-  - ⏳ Chatbot latency: Not yet implemented (goal: <2.5s)
-- **Cost**: $0 (MVP using open-source models)
-- **Fairness**:
-  - ✅ Zero correlation with protected attributes (fairness tests implemented)
-  - ✅ Demographics table excluded from ranking
-  - ✅ PII redaction patterns defined
+### **MinIO Connection Issues**
+```bash
+docker restart rightstaff-minio
+```
 
-## 🔒 Security & Compliance
+### **Qdrant Collection Errors**
+```bash
+# Recreate collections
+cd backend
+python -c "from app.services.vector_store import vector_store; vector_store.initialize_collections()"
+```
 
-- PII redaction in logs and vector metadata
-- Read-only PostgreSQL access for AI team
-- Exclude candidate_demographics from ranking
-- Audit trails for all operations
+### **Database Schema Mismatch**
+```bash
+# Reset database
+cd docker
+docker-compose down -v
+docker-compose up -d
+# Wait 10 seconds, then repopulate
+cd ../backend
+python populate_dummy_data.py
+```
 
-## 🗺️ MVP Roadmap (14-Day Timeline)
-
-### ✅ COMPLETED: Days 1-4 (Foundation + Core Ranking)
-
-**Infrastructure & Ingestion:**
-- ✅ Docker Compose environment (PostgreSQL, Qdrant, Redis, MinIO)
-- ✅ Database schema with job, candidate, resume, job_application tables
-- ✅ Resume ingestion pipeline: Parse → Chunk → Embed → Store
-- ✅ Redis queue for async webhook processing
-- ✅ MinIO integration for resume storage
-- ✅ Text parsing with encoding detection (TXT files, expandable to PDF/DOCX)
-- ✅ Semantic chunking with overlap (configurable chunk_size and overlap)
-
-**Skill Extraction & Matching:**
-- ✅ spaCy NER-based skill extraction with 400+ technical terms
-- ✅ Taxonomy-based skill normalization (Python3 → Python)
-- ✅ Fuzzy matching with rapidfuzz
-- ✅ Ontology gate (must-have skills filtering)
-- ✅ Skill expansion for variants
-
-**Ranking System:**
-- ✅ Dual job embeddings: Profile vector + Skills vector
-- ✅ Dense retrieval via Qdrant vector search
-- ✅ Structured scoring: Years of experience, profile completeness
-- ✅ Score blending: 40% dense + 35% structured + 25% completeness
-- ✅ Candidate banding: High/Medium/Low confidence (top 20% / 20-60% / 40%+)
-- ✅ Rule-based explanation generation with evidence citations
-- ✅ Ranking API endpoint: POST /jobs/{job_id}/rank
-
-**Testing & Quality:**
-- ✅ Unit tests for ranking, vector store, embeddings, ontology
-- ✅ Integration tests for end-to-end ranking workflow
-- ✅ Fairness tests for bias detection and compliance
-- ✅ Health check endpoint with service status
-- ✅ Structured logging with uvicorn
-
-### 🚧 IN PROGRESS: Days 5-8 (Advanced Features)
-
-**Planned Enhancements:**
-- ⏳ Cross-encoder re-ranking (pairwise scoring with bge-reranker-base)
-  - Status: Placeholder file exists (`backend/app/services/reranker.py` - TODO)
-  - Impact: +10-15% ranking accuracy
-  - Current weight: 0% (not integrated into score blending)
-
-- ⏳ WebSocket chatbot (job-scoped RAG with streaming)
-  - Status: Placeholder files exist (`chat.py`, `chatbot.py` - TODOs)
-  - Dependencies: RAG pipeline, WebSocket endpoint, LLM integration
-  - Not registered in main.py yet
-
-- ⏳ Email drafting functionality
-  - Status: Not implemented (planned for Days 9-12)
-  - Dependencies: LLM integration, candidate context aggregation
-
-- ⏳ LLM-powered explanations (enhancement beyond PRD)
-  - Status: Current explanations are rule-based
-  - Goal: Use LLM agents for richer, more contextual explanations
-
-- ⏳ Redis caching for ranking results
-  - Status: Redis infrastructure ready, caching logic not implemented
-  - Impact: Reduce latency for repeated queries
-
-### 📋 TODO: Days 9-14 (Completion & Testing)
-
-**Days 9-12: Feature Completion**
-- ❌ Implement cross-encoder re-ranking
-- ❌ Build RAG pipeline for chatbot
-- ❌ Create WebSocket endpoint with streaming
-- ❌ Integrate LLM for explanations
-- ❌ Add multi-agent collaboration for chatbot context
-- ❌ Implement email drafting with templates
-
-**Days 13-14: Final Testing & Delivery**
-- 🟡 Comprehensive testing (partially complete)
-  - ✅ Unit tests for core services
-  - ✅ Fairness tests for bias detection
-  - ❌ Integration tests for chatbot
-  - ❌ Load testing with locust
-  - ❌ End-to-end ranking validation
-- ✅ API documentation (Swagger UI at `/docs`)
-- ❌ Performance optimization
-- ❌ Internal demo and handoff to Portal team
-
-## ⚠️ Known Limitations (Days 1-4 MVP)
-
-### Currently Not Implemented
-
-1. **Cross-Encoder Re-Ranking**: Placeholder exists but not integrated
-   - Impact: Ranking relies solely on dense retrieval + structured scoring
-   - Workaround: Score blending provides reasonable accuracy
-
-2. **WebSocket Chatbot**: Placeholder files exist but not functional
-   - Impact: No interactive Q&A for job-scoped queries
-   - Workaround: Use Swagger UI to query ranking endpoint directly
-
-3. **LLM-Powered Explanations**: Current explanations are rule-based
-   - Impact: Explanations are factual but not conversational
-   - Workaround: Rule-based citations still provide evidence
-
-4. **Email Drafting**: Not implemented
-   - Impact: Manual candidate outreach required
-   - Workaround: Use ranking results to prioritize outreach manually
-
-5. **Redis Caching**: Infrastructure ready but not implemented
-   - Impact: Repeated queries don't benefit from caching
-   - Workaround: Acceptable for MVP, ranking is fast enough (~2-3s)
-
-### File Format Support
-
-- ✅ **TXT**: Fully supported with encoding detection
-- ⏳ **PDF**: Parser structure exists, needs PDF library integration
-- ⏳ **DOCX**: Parser structure exists, needs DOCX library integration
-
-### Database Limitations
-
-- **Demographics Table**: Intentionally excluded from ranking for fairness
-- **Read-Only Access**: AI team has read-only access (by design)
-- **No Audit Trail**: Ranking decisions not logged to database yet
-
-## 🚀 Post-MVP Roadmap (Weeks 3+)
-
-### Phase 1: Complete Days 5-8 Features
-- Cross-encoder re-ranking with bge-reranker-base
-- WebSocket chatbot with RAG pipeline
-- LLM-powered explanations using agents
-- Email drafting with templates
-- Redis caching for performance
-
-### Phase 2: Production Infrastructure
-- Migration to managed services:
-  - Pinecone or AWS OpenSearch (vector DB)
-  - AWS S3 (object storage)
-  - ElastiCache (Redis)
-- OpenAI embeddings (ada-002) for better semantic understanding
-- Kubernetes/ECS deployment
-- CI/CD pipeline with automated testing
-
-### Phase 3: Advanced Features
-- Adaptive learning from agent feedback
-- Multi-job matching (reverse ranking: find best jobs for candidate)
-- Interview scheduling integration with calendar APIs
-- Batch ranking for multiple jobs
-- Advanced analytics dashboard
-- A/B testing framework for ranking strategies
-
-### Phase 4: Portal Integration
-- Frontend integration with Portal team's UI
-- SSO authentication
-- Role-based access control
-- Webhooks for job and candidate updates
-- Real-time notifications
+---
 
 ## 🤝 Contributing
 
-This is a learning project. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-## 📝 License
+---
 
-MIT License - See [LICENSE](LICENSE)
+## 📄 License
 
-## 🙏 Acknowledgments
+This project is proprietary software.
 
-Built as part of a Senior AI Engineering learning path.
+---
+
+## 📧 Contact
+
+For questions or support, contact the development team.
+
+---
+
+**Built with ❤️ for modern recruitment**
